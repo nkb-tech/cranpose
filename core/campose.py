@@ -7,15 +7,24 @@ import time
 
 from scipy.spatial.transform import Rotation as R
 
-from utils import custom_estimatePoseSingleMarkers, flip_z_axis_neg_det, poly_area, f_left_x, f_right_x, f_area
+from utils import\
+    custom_estimatePoseSingleMarkers, \
+    custom_estimatePoseSingleMarkers_use_extrinsic_guess, \
+    flip_z_axis_neg_det, \
+    poly_area,\
+    f_left_x,\
+    f_right_x, \
+    f_area
 
 
-def estimate_marker_poses_in_camera(frame: np.ndarray,
-                                    aruco_dict_type: str,
-                                    edge_len: float,
-                                    matrix_coefficients: np.ndarray,
-                                    distortion_coefficients: np.ndarray,
-                                    return_frame=False):
+def estimate_marker_poses_in_camera(
+        frame: np.ndarray,
+        aruco_dict_type: str,
+        edge_len: float,
+        matrix_coefficients: np.ndarray,
+        distortion_coefficients: np.ndarray,
+        return_frame=False
+):
     """
     Function detects aruco markers from dict "aruco_dict_type"
     and estimates their poses in camera coordinate system
@@ -27,8 +36,8 @@ def estimate_marker_poses_in_camera(frame: np.ndarray,
 
     return:
     frame - The frame with the axis drawn on it
-    ids - list of markers' ids
-    mtcs - list of matrices (marker coordinate systems in camera coordinate system)
+    mtcs - dict marker_id: marker_pose
+    id - id of the largest marker
     """
 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -122,6 +131,8 @@ def estimate_marker_poses_in_camera_weighted(
     Function detects aruco markers from dict "aruco_dict_type"
     and estimates their poses in camera coordinate system
 
+    It uses weigh
+
     args:
     frame - Frame from the video stream
     matrix_coefficients - Intrinsic matrix of the calibrated camera
@@ -129,8 +140,8 @@ def estimate_marker_poses_in_camera_weighted(
 
     return:
     frame - The frame with the axis drawn on it
-    ids - list of markers' ids
-    mtcs - list of matrices (marker coordinate systems in camera coordinate system)
+    mtcs - dict marker_id: marker_pose
+    weights - dict marker_id: marker_weight
     """
 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -146,9 +157,7 @@ def estimate_marker_poses_in_camera_weighted(
     # Select markers not close to the edges of the image
     height, width = frame.shape[:2]
 
-
     # = [max(a[0, :, 0]) - min(a[0, :, 0]) + max(a[0, :, 1]) - min(a[0, :, 1]) for a in corners]
-
 
     mtcs = []
     # print(ids.reshape(1,-1)[0])
@@ -219,8 +228,8 @@ def estimate_marker_poses_in_camera_weighted(
                 distortion_coefficients
             )
 
-            print(rvec)
-            print(tvec)
+            # print(rvec)
+            # print(tvec)
             # print(marker_points)
 
             r = R.from_rotvec(rvec[0][0])
@@ -255,9 +264,110 @@ def estimate_marker_poses_in_camera_weighted(
     # print (mtcs)
 
     if return_frame:
-        return frame, dict(zip(tuple(ids.reshape(1,-1)[0]), mtcs)), dict(zip(tuple(ids.reshape(1,-1)[0]), weights))
+        return frame, dict(zip(tuple(ids.reshape(1, -1)[0]), mtcs)), dict(zip(tuple(ids.reshape(1, -1)[0]), weights))
     else:
-        return 0, dict(zip(tuple(ids.reshape(1,-1)[0]), mtcs)), dict(zip(tuple(ids.reshape(1,-1)[0]), weights))
+        return 0, dict(zip(tuple(ids.reshape(1, -1)[0]), mtcs)), dict(zip(tuple(ids.reshape(1, -1)[0]), weights))
+
+
+def estimate_marker_poses_in_camera_weighted_extrinsic_guess(
+        frame: np.ndarray,
+        aruco_dict_type: str,
+        edge_len: float,
+        matrix_coefficients: np.ndarray,
+        distortion_coefficients: np.ndarray,
+        return_frame=False,
+        use_extrinsic_guess=False,
+        rvec=None,
+        tvec=None,
+    ):
+    """
+    Function detects aruco markers from dict "aruco_dict_type"
+    and estimates their poses in camera coordinate system
+
+    args:
+    frame - Frame from the video stream
+    matrix_coefficients - Intrinsic matrix of the calibrated camera
+    distortion_coefficients - Distortion coefficients associated with your camera
+
+    return:
+    frame - The frame with the axis drawn on it
+    ids - list of markers' ids
+    mtcs - list of matrices (marker coordinate systems in camera coordinate system)
+    """
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    aruco_dict = cv2.aruco.Dictionary_get(aruco_dict_type)
+    parameters = cv2.aruco.DetectorParameters_create()
+    parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+
+    corners, ids, rejected_img_points = cv2.aruco.detectMarkers(
+        gray,
+        aruco_dict,
+        parameters=parameters,
+        cameraMatrix=matrix_coefficients,
+        distCoeff=distortion_coefficients
+    )
+
+    # If markers are detected
+    # Select markers not close to the edges of the image
+    height, width = frame.shape[:2]
+
+    mtcs = []
+    if len(corners) > 0:
+
+        # Calculate respective of each marker
+        areas = np.array([poly_area(corner[0][:, 0], corner[0][:, 1])/(height * width) for corner in corners])
+        area_weights = f_area(areas)
+        area_weights /= sum(area_weights)
+
+        sizes = [max(a[0, :, 0]) - min(a[0, :, 0]) + max(a[0, :, 1]) - min(a[0, :, 1]) for a in corners]
+
+        leftmost_x_coords = np.array([min(a[0, :, 0])/width for a in corners])
+        rightmost_x_coords = np.array([max(a[0, :, 0])/width for a in corners])
+
+        left_x_weights = f_left_x(leftmost_x_coords)
+        left_x_weights /= sum(left_x_weights)
+
+        right_x_weights = f_right_x(rightmost_x_coords)
+        right_x_weights /= sum(right_x_weights)
+
+        weights = right_x_weights * right_x_weights * area_weights
+        weights /= sum(weights)
+
+        for i in range(0, len(ids)):
+
+            rvec, tvec, marker_points = custom_estimatePoseSingleMarkers_use_extrinsic_guess(
+                corners[i],
+                edge_len,
+                matrix_coefficients,
+                distortion_coefficients,
+                use_extrinsic_guess,
+                rvec,
+                tvec,
+            )
+
+            r = R.from_rotvec(rvec[0][0])
+            mtx = np.vstack([np.column_stack([r.as_matrix(), tvec[0][0]]), [0, 0, 0, 1]])
+
+            if return_frame:
+                # Draw a square around the markers
+                cv2.aruco.drawDetectedMarkers(frame, corners)
+
+                # Draw Axis
+                cv2.aruco.drawAxis(frame, matrix_coefficients, distortion_coefficients, rvec, tvec, edge_len)
+
+            mtcs.append(mtx)
+
+    else:
+        if return_frame:
+            return frame, {}, np.array([0])
+        else:
+            return 1, {}, np.array([0])
+
+    if return_frame:
+        return frame, dict(zip(tuple(ids.reshape(1, -1)[0]), mtcs)), dict(zip(tuple(ids.reshape(1, -1)[0]), weights))
+    else:
+        return 0, dict(zip(tuple(ids.reshape(1, -1)[0]), mtcs)), dict(zip(tuple(ids.reshape(1, -1)[0]), weights))
 
 
 def estimate_camera_pose_in_base(all_markers_in_base: dict, detected_markers_in_camera: dict):
@@ -317,10 +427,22 @@ def estimate_camera_pose_in_base_weighted(
         )
     )  # camera coordinate system in markers' coordinate systems
 
+    # By camera_in_markers we understand whether the estimation is correct.
+    print(camera_in_markers)
+    pop_ids = []
+    for marker_id in camera_in_markers:
+        if camera_in_markers[marker_id][0][3] > 0:
+            pop_ids.append(marker_id)
+    for marker_id in pop_ids:
+        markers_in_base.pop(marker_id)
+        camera_in_markers.pop(marker_id)
+        marker_weights.pop(marker_id)
+    # We reject incorrect estimations
+
     camera_in_base = dict(
         zip(
-            detected_markers_in_camera.keys(),
-            [np.dot(markers_in_base[marker], camera_in_markers[marker]) for marker in detected_markers_in_camera]
+            camera_in_markers.keys(),
+            [np.dot(markers_in_base[marker], camera_in_markers[marker]) for marker in camera_in_markers]
         )
     )  # estimation of camera coordinate system in base
 
@@ -330,12 +452,15 @@ def estimate_camera_pose_in_base_weighted(
     rvec = np.sum([rvec*weight for rvec, weight in zip(rvecs, marker_weights.values())], axis=0)
     tvec = np.sum([tvec*weight for tvec, weight in zip(tvecs, marker_weights.values())], axis=0)
 
-    # print(rvec)
-
-    r = R.from_rotvec(rvec)
-    camera_in_base = {
-        "weighted": np.vstack([np.column_stack([r.as_matrix(), tvec]), [0, 0, 0, 1]])
-    }
+    if type(rvec) == np.float64:
+        camera_in_base = {
+            "weighted": np.array([])
+        }
+    else:
+        r = R.from_rotvec(rvec)
+        camera_in_base = {
+            "weighted": np.vstack([np.column_stack([r.as_matrix(), tvec]), [0, 0, 0, 1]])
+        }
 
     return camera_in_base
 

@@ -226,6 +226,54 @@ def custom_estimatePoseSingleMarkers(corners, marker_size, mtx, distortion):
     return rvecs, tvecs, trash
 
 
+def custom_estimatePoseSingleMarkers_use_extrinsic_guess(
+        corners,
+        marker_size,
+        mtx,
+        distortion,
+        use_extrinsic_guess=False,
+        rvec=None,
+        tvec=None,
+):
+    '''
+    This will estimate the rvec and tvec for each of the marker corners detected by:
+       corners, ids, rejectedImgPoints = detector.detectMarkers(image)
+    corners - is an array of detected corners for each detected marker in the image
+    marker_size - is the size of the detected markers
+    mtx - is the camera matrix
+    distortion - is the camera distortion matrix
+    RETURN list of rvecs, tvecs, and trash (so that it corresponds to the old estimatePoseSingleMarkers())
+    '''
+    marker_points = np.array([[-marker_size / 2, marker_size / 2, 0],
+                              [marker_size / 2, marker_size / 2, 0],
+                              [marker_size / 2, -marker_size / 2, 0],
+                              [-marker_size / 2, -marker_size / 2, 0]], dtype=np.float32)
+    trash = []
+    rvecs = []
+    tvecs = []
+    i = 0
+    for c in corners:
+        nada, R, t = cv2.solvePnP(
+            marker_points,
+            corners[i],
+            mtx,
+            distortion,
+            rvec=rvec,
+            tvec=tvec,
+            useExtrinsicGuess=use_extrinsic_guess,
+            flags=cv2.SOLVEPNP_IPPE_SQUARE,
+            )
+        # print(R)
+        rvecs.append(R.reshape(1, -1))
+        tvecs.append(t.reshape(1, -1))
+        trash.append(nada)
+
+    rvecs=np.asarray(rvecs)
+    tvecs=np.asarray(tvecs)
+
+    return rvecs, tvecs, trash
+
+
 def flip_z_axis_neg_det(mtx):
     # Flips Z-axis in case the coordinate system is left-handed
 

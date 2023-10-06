@@ -1,10 +1,12 @@
 import numpy as np
 import cv2
+# from typing import
 from datetime import datetime
 from campose import \
     estimate_marker_poses_in_camera,\
     estimate_camera_pose_in_base,\
-    estimate_marker_poses_in_camera_weighted,\
+    estimate_marker_poses_in_camera_weighted, \
+    estimate_marker_poses_in_camera_weighted_extrinsic_guess,\
     estimate_camera_pose_in_base_weighted
 from utils import create_marker_mtcs
 
@@ -23,6 +25,8 @@ class PoseSingle:
         self.matrix_coefficients = matrix_coefficients
         self.distortion_coefficients = distortion_coefficients
         self.all_marker_poses = create_marker_mtcs(n_markers, marker_step)
+        self.last_valid_marker_in_camera_rvec = {}  # key - marker id: value - rvec
+        self.last_valid_marker_in_camera_tvec = {}  # same : tvec
 
     def inference(self, image: np.ndarray, timestamp: datetime, return_frame=False) -> tuple[
         np.ndarray,
@@ -42,7 +46,7 @@ class PoseSingle:
         timestamp,
         largest_marker_size
         """
-        frame, detected_marker_poses, largest_marker_size = estimate_marker_poses_in_camera(
+        frame, detected_marker_poses, largest_marker_size = estimate_marker_poses_in_camera_weighted(
             image,
             self.aruco_dict_type,
             self.marker_edge_len,
@@ -82,13 +86,17 @@ class PoseSingle:
             timestamp,
             largest_marker_size
             """
-            frame, detected_marker_poses, weights = estimate_marker_poses_in_camera_weighted(
+            frame, detected_marker_poses, weights = estimate_marker_poses_in_camera(
                 image,
                 self.aruco_dict_type,
                 self.marker_edge_len,
                 self.matrix_coefficients,
                 self.distortion_coefficients,
-                return_frame)
+                return_frame=return_frame,
+                # use_extrinsic_guess=True,
+                # rvec=self.last_valid_marker_in_camera_rvec,
+                # tvec=self.last_valid_marker_in_camera_rvec,
+            )
 
             # print(detected_marker_poses)
 
@@ -100,6 +108,10 @@ class PoseSingle:
                 detected_marker_poses,
                 weights
             )
+
+            # print(type(camera_poses_in_base['weighted']))
+            if camera_poses_in_base['weighted'].size == 0:
+                return frame, np.array(1), timestamp, weights
 
             if return_frame:
                 return frame, np.mean(list(camera_poses_in_base.values()), axis=0), timestamp, weights
