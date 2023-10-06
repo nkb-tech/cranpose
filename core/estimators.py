@@ -46,7 +46,7 @@ class PoseSingle:
         timestamp,
         largest_marker_size
         """
-        frame, detected_marker_poses, largest_marker_size = estimate_marker_poses_in_camera_weighted(
+        frame, detected_marker_poses, largest_marker_size = estimate_marker_poses_in_camera(
             image,
             self.aruco_dict_type,
             self.marker_edge_len,
@@ -86,7 +86,7 @@ class PoseSingle:
             timestamp,
             largest_marker_size
             """
-            frame, detected_marker_poses, weights = estimate_marker_poses_in_camera(
+            frame, detected_marker_poses, weights = estimate_marker_poses_in_camera_weighted(
                 image,
                 self.aruco_dict_type,
                 self.marker_edge_len,
