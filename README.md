@@ -5,6 +5,8 @@
 1. Generate marker images with generate_markers.ipynb
 2. Calibrate camera using calc_camera_matrix.ipynb
 3. See sample usages in estimate_pose_hikvision.ipynb or estimate_pose_render.ipynb
+ 
+!!! NOW LOOK THROUGH sample_usage.ipynb 
 
 ## Sample calibrations
 
