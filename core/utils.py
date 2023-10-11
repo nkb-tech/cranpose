@@ -5,7 +5,7 @@ import sys
 import pickle as pk
 
 
-f_left_x = lambda x: np.tanh(10*(x-0.05)).clip(min=0)
+f_left_x = lambda x: np.tanh(10*(x-0.65)).clip(min=0)
 f_right_x = lambda x: np.tanh(10*(1-x-0.05)).clip(min=0)
 f_area = lambda x: x**1.2
 
@@ -212,19 +212,49 @@ def custom_estimatePoseSingleMarkers(corners, marker_size, mtx, distortion):
     trash = []
     rvecs = []
     tvecs = []
-    i = 0
     for c in corners:
-        nada, R, t = cv2.solvePnP(marker_points, corners[i], mtx, distortion, False, cv2.SOLVEPNP_IPPE_SQUARE)
+        nada, R, t = cv2.solvePnP(marker_points, c, mtx, distortion, False, cv2.SOLVEPNP_IPPE_SQUARE)
         # print(R)
         rvecs.append(R.reshape(1, -1))
         tvecs.append(t.reshape(1, -1))
         trash.append(nada)
 
-    rvecs=np.asarray(rvecs)
-    tvecs=np.asarray(tvecs)
+    rvecs = np.asarray(rvecs)
+    tvecs = np.asarray(tvecs)
 
     return rvecs, tvecs, trash
 
+def draw_markers_on_frame(
+        frame,
+        corners,
+        matrix_coefficients,
+        distortion_coefficients,
+        rvec,
+        tvec,
+        edge_len,
+    ):
+    # Draw a square around the markers
+    cv2.aruco.drawDetectedMarkers(frame, corners)
+
+    # Draw Axis
+    cv2.aruco.drawAxis(frame, matrix_coefficients, distortion_coefficients, rvec, tvec, edge_len)
+
+
+def draw_weights_on_frame(frame, corners, weights):
+    font = cv2.FONT_HERSHEY_SIMPLEX
+
+    # print(frame.shape[0])
+    # print(corners[3][0][:, 1])
+    # print(corners)
+    for id in corners:
+        org = (int(np.mean(corners[id][0][:, 0])), frame.shape[0] - 100)
+        font_scale = 3
+        color = (255, 50, 50)
+        thickness = 2
+        frame = cv2.putText(frame, str("%.2f" % weights[id]), org, font,
+                            font_scale, color, thickness, cv2.LINE_AA)
+
+    return frame
 
 def custom_estimatePoseSingleMarkers_use_extrinsic_guess(
         corners,
@@ -248,10 +278,14 @@ def custom_estimatePoseSingleMarkers_use_extrinsic_guess(
                               [marker_size / 2, marker_size / 2, 0],
                               [marker_size / 2, -marker_size / 2, 0],
                               [-marker_size / 2, -marker_size / 2, 0]], dtype=np.float32)
-    trash = []
+    nadas = []
     rvecs = []
     tvecs = []
     i = 0
+
+    if (rvec is None) or (tvec is None):
+        use_extrinsic_guess = False
+
     for c in corners:
         nada, R, t = cv2.solvePnP(
             marker_points,
@@ -266,12 +300,12 @@ def custom_estimatePoseSingleMarkers_use_extrinsic_guess(
         # print(R)
         rvecs.append(R.reshape(1, -1))
         tvecs.append(t.reshape(1, -1))
-        trash.append(nada)
+        nadas.append(nada)
 
-    rvecs=np.asarray(rvecs)
-    tvecs=np.asarray(tvecs)
+    rvecs = np.asarray(rvecs)
+    tvecs = np.asarray(tvecs)
 
-    return rvecs, tvecs, trash
+    return rvecs, tvecs, nadas
 
 
 def flip_z_axis_neg_det(mtx):
