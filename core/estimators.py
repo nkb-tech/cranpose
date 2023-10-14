@@ -15,6 +15,7 @@ from campose import \
     compute_marker_weights, compute_weighted_pose_estimation
 from utils import create_marker_mtcs, draw_markers_on_frame, draw_weights_on_frame
 
+from pykalman import KalmanFilter
 
 class PoseSingle:
     def __init__(self,
@@ -25,6 +26,9 @@ class PoseSingle:
                  marker_edge_len: float,
                  matrix_coefficients: np.ndarray,
                  distortion_coefficients: np.ndarray,
+                 apply_kf: bool = True,
+                 transition_coef: float = 1,
+                 observation_coef: float = 1,
                  invert_image: bool = False):
 
         self.aruco_dict_type = aruco_dict_type
@@ -36,6 +40,73 @@ class PoseSingle:
         self.last_valid_marker_in_camera_rvec = {}  # key - marker id: value - rvec
         self.last_valid_marker_in_camera_tvec = {}  # same : tvec
         self.invert_image = invert_image
+        self.apply_kf = apply_kf
+        self.transition_coef = transition_coef
+        self.observation_coef = observation_coef
+
+        # the smaller the transition_coef the slower the filter
+        # the smaller the observation_coef the faster the filter
+
+        # Initial pose matrix
+        self.camera_in_base = np.ma.array([
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 0],
+            [0, 0, 0, 1]
+        ])
+
+        # Kalman-Filter initialization
+        self.filtered_state_mean = None
+        self.filtered_state_covariance = None
+        if apply_kf:
+            self.camera_in_base.mask = True
+            self.kf = self.init_kf()
+        else:
+            self.camera_in_base.mask = False
+            self.kf = None
+
+    def init_kf(self):
+        # time step
+        dt = 1/25
+
+        # transition_matrix
+        F = [[1, dt, 0.5 * dt * dt],
+             [0, 1,  dt],
+             [0, 0,  1]]
+
+        # observation_matrix
+        H = [1, 0, 0]
+
+        # transition_covariance
+        Q = np.array([
+            [ 8.28688186e-02,  4.56069709e-02,  1.15608369e-03],
+            [ 1.29460844e-03,  2.18108024e-02,  1.13942461e-03],
+            [-2.02707405e-04,  8.94215211e-04,  7.30274151e-05]
+        ])*self.transition_coef
+
+        # observation_covariance
+        R = np.array([[5000]])*self.observation_coef
+
+        # initial_state_mean
+        X0 = [0,
+              0,
+              0]
+
+        # initial_state_covariance
+        P0 = [[1e5, 0, 0],
+              [0,   1, 0],
+              [0,   0, 1]]
+
+        self.filtered_state_mean = X0
+        self.filtered_state_covariance = P0
+
+        return KalmanFilter(
+            transition_matrices=F,
+            observation_matrices=H,
+            transition_covariance=Q,
+            observation_covariance=R,
+            initial_state_mean=X0,
+            initial_state_covariance=P0)
 
     # def inference(self, image: np.ndarray, timestamp: datetime, return_frame=False) -> tuple[
     #     np.ndarray,
@@ -218,11 +289,34 @@ class PoseSingle:
         else:
             res_image = np.array(0)
 
-        if camera_in_base_weighted.size == 0:
-            camera_in_base_weighted = np.array(1)
+        if camera_in_base_weighted.size == 0:  # if marker is not detected
+            # we set 'result' to be previous pose (basically to keep shape)
+            camera_in_base_result = self.camera_in_base
+            # and set mask = True, which omits all values from the matrix:
+            if self.apply_kf:  # Maybe it is reasonable to mask the estimation only is we're using kf
+                camera_in_base_result.mask = True
 
-        return res_image, camera_in_base_weighted, weights
+        else:  # if marker is detected
+            # we update the result estimation
+            camera_in_base_result = np.ma.asarray(camera_in_base_weighted)
+            camera_in_base_result.mask = False
+            # self.camera_in_base = camera_in_base_result
 
+        # Apply Kalman-filter
+        # IMPORTANT ! We apply Kalman-filter only to "x" coordinate of the measurements
+        if self.apply_kf:
+            self.filtered_state_mean, self.filtered_state_covariance = (
+                self.kf.filter_update(
+                    self.filtered_state_mean,
+                    self.filtered_state_covariance,
+                    observation=camera_in_base_result[0, 3])
+            )
+            camera_in_base_result.mask = False
+            camera_in_base_result[0, 3] = self.filtered_state_mean[0]
+
+        self.camera_in_base = camera_in_base_result
+
+        return res_image, camera_in_base_result, weights
 
     def __call__(self, image, return_frame=False):
         return self.weighted_inference_ext_guess(image, return_frame)
