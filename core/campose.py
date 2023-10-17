@@ -4,6 +4,7 @@ import sys
 from utils import ARUCO_DICT
 import argparse
 import time
+from typing import Callable
 
 from scipy.spatial.transform import Rotation as R
 
@@ -12,8 +13,8 @@ from utils import\
     custom_estimatePoseSingleMarkers_use_extrinsic_guess, \
     flip_z_axis_neg_det, \
     poly_area,\
-    f_left_x,\
-    f_right_x, \
+    f_left_x_002,\
+    f_right_x_002, \
     f_area
 
 
@@ -180,10 +181,10 @@ def estimate_marker_poses_in_camera_weighted(
         leftmost_x_coords = np.array([min(a[0, :, 0])/width for a in corners])
         rightmost_x_coords = np.array([max(a[0, :, 0])/width for a in corners])
 
-        left_x_weights = f_left_x(leftmost_x_coords)
+        left_x_weights = f_left_x_002(leftmost_x_coords)
         left_x_weights /= sum(left_x_weights)
 
-        right_x_weights = f_right_x(rightmost_x_coords)
+        right_x_weights = f_right_x_002(rightmost_x_coords)
         right_x_weights /= sum(right_x_weights)
 
         # print('left')
@@ -365,36 +366,58 @@ def detect_markers(
 
 
 def compute_marker_weights(
-        corner_dict,
-        height,
-        width
-    ):
+        corner_dict: dict,
+        height: float,
+        width: float,
+        weight_func_area: Callable = f_area,
+        weight_func_left_edge: Callable = f_left_x_002,
+        weight_func_right_edge: Callable = f_right_x_002,
+        ) -> dict[float]:
     """
-    Weights markers
+    Computes marker weights
+    Arguments:
+        corner_dict: dict - corner dict from opencv method,
+        height: float - frame height,
+        width: float - frame width,
+        weight_func_area: Callable - function to weight marker size,
+        weight_func_left_edge - function to weight marker location relative to leftmost edge,
+        weight_func_right_edge - function to weight marker location relative to rightmost edge)
+
     """
     corners = corner_dict.values()
     ids = corner_dict.keys()
+    f_area = weight_func_area
+    f_left_x = weight_func_left_edge
+    f_right_x = weight_func_right_edge
+
     # If markers are detected
     if len(corners) > 0:
         # Calculate respective of each marker
         areas = np.array([poly_area(corner[0][:, 0], corner[0][:, 1]) / (height * width) for corner in corners])
         area_weights = f_area(areas)
-        area_weights /= sum(area_weights)
+        if not sum(area_weights) == 0:
+            area_weights /= sum(area_weights)
 
         sizes = [max(a[0, :, 0]) - min(a[0, :, 0]) + max(a[0, :, 1]) - min(a[0, :, 1]) for a in corners]
 
         leftmost_x_coords = np.array([min(a[0, :, 0]) / width for a in corners])
         rightmost_x_coords = np.array([max(a[0, :, 0]) / width for a in corners])
-
+        # print('leftmost_x_coords', leftmost_x_coords)
+        # print('rightmost_x_coords', rightmost_x_coords)
         left_x_weights = f_left_x(leftmost_x_coords)
-        left_x_weights /= sum(left_x_weights)
+        if not sum(left_x_weights) == 0:
+            left_x_weights /= sum(left_x_weights)
 
         right_x_weights = f_right_x(rightmost_x_coords)
-        right_x_weights /= sum(right_x_weights)
+        if not sum(right_x_weights) == 0:
+            right_x_weights /= sum(right_x_weights)
 
-        weights = right_x_weights * right_x_weights * area_weights
-        weights /= sum(weights)
+        # print('left_x_weights', left_x_weights)
+        # print('right_x_weights', right_x_weights)
 
+        weights = left_x_weights * right_x_weights * area_weights
+        if not sum(weights) == 0:
+            weights /= sum(weights)
     else:
         return {}
 

@@ -2,6 +2,8 @@ import numpy as np
 from copy import deepcopy
 # from typing import
 from datetime import datetime
+from typing import Callable
+
 from campose import \
     detect_markers, \
     estimate_camera_pose_in_markers, \
@@ -13,14 +15,16 @@ from campose import \
     check_wrong_estimations, \
     estimate_camera_pose_in_base, \
     compute_marker_weights, compute_weighted_pose_estimation
-from utils import create_marker_mtcs, draw_markers_on_frame, draw_weights_on_frame
+from utils import create_marker_mtcs, draw_markers_on_frame, draw_weights_on_frame, \
+    f_left_x_002, f_right_x_002, f_area
 
 from pykalman import KalmanFilter
+
 
 class PoseSingle:
     def __init__(self,
                  aruco_dict_type: str,
-                 camera_orientation: int, # -1 rear, 1 front
+                 camera_orientation: int,
                  n_markers: int,
                  marker_step: float,
                  marker_edge_len: float,
@@ -29,7 +33,26 @@ class PoseSingle:
                  apply_kf: bool = True,
                  transition_coef: float = 1,
                  observation_coef: float = 1,
+                 x_bias: float = 0,
+                 size_weight_func: Callable = f_area,
+                 left_edge_weight_func: Callable = f_left_x_002,
+                 right_egde_weight_func: Callable = f_right_x_002,
                  invert_image: bool = False):
+
+        """
+        aruco_dict_type: str - тип Аруко маркеров (напр. DICT_4X4_50)
+        camera_orientation: int, - ориентация камеры -1 rear, 1 front
+        n_markers: int - максимальное число маркеров,
+        marker_step: float - шаг между маркерами (м),
+        marker_edge_len: float - длина стороны маркера (м),
+        matrix_coefficients: np.ndarray - калибровка камеры intrinsic,
+        distortion_coefficients: np.ndarray - коэффициенты дисторсии,
+        apply_kf: bool = True - применять ли фильтр Калмана,
+        transition_coef: float = 1 - коэффициент Калман фильтра transition_coef, чем больше, тем быстрее фильтр,
+        observation_coef: float = 1 - коэффициент Калман фильтра observation_coef, чем больше, тем медленнее фильтр,
+        x_bias: float = 0 - сдвиг камеры по X относительно начала координат крана,
+        invert_image: bool = False - инвертировать ли картинку
+        """
 
         self.aruco_dict_type = aruco_dict_type
         self.camera_orientation = camera_orientation
@@ -43,7 +66,10 @@ class PoseSingle:
         self.apply_kf = apply_kf
         self.transition_coef = transition_coef
         self.observation_coef = observation_coef
-
+        self.x_bias = x_bias
+        self.size_weight_func = size_weight_func
+        self.left_edge_weight_func = left_edge_weight_func
+        self.right_egde_weight_func = right_egde_weight_func
         # the smaller the transition_coef the slower the filter
         # the smaller the observation_coef the faster the filter
 
@@ -198,23 +224,24 @@ class PoseSingle:
     #     else:
     #         return np.array(0), np.mean(list(camera_poses_in_base.values()), axis=0), timestamp, weights
 
-    def weighted_inference_ext_guess(self, image: np.ndarray, return_frame=False) -> tuple[
-        np.ndarray,
-        np.ndarray,
-        float
-    ]:
+    def weighted_inference_ext_guess(
+            self, image: np.ndarray,
+            return_frame: bool = False
+    ) -> tuple[np.ndarray, np.ndarray, dict[float]]:
         """
-            Arguments
-            image:
-            timestamp:
+        Takes image from camera and proceeds pose estimation in base coordinate system.
+
+        Arguments
+            image: np.ndarray
             return_frame:
 
-            Returns:
-            frame,
-            camera_poses_in_base - array 4x4,
-            timestamp,
-            largest_marker_size
-            """
+        Returns:
+            tuple[
+                frame: np.ndarray - frame with drawn marker edges and axes,
+                camera_poses_in_base: np.ndarray - of shape (4, 4),
+                weights: dict[np.ndarray] - weights of each marker
+                ]
+        """
 
         # Step 1. Detect markers
         corners, ids, rejected_img_points = detect_markers(
@@ -257,10 +284,18 @@ class PoseSingle:
         # Step 5. Estimate camera pose in base
         camera_in_base = estimate_camera_pose_in_base(self.all_marker_poses, camera_in_markers)
         # Step 6. Assign weights to markers
-        weights = compute_marker_weights(corners_dict, *image.shape[:2])
+        weights = compute_marker_weights(
+            corners_dict,
+            *image.shape[:2],
+            weight_func_area=self.size_weight_func,
+            weight_func_left_edge=self.left_edge_weight_func,
+            weight_func_right_edge=self.right_egde_weight_func,
+        )
         # Step 7. Compute weighted pose
-
-        camera_in_base_weighted = compute_weighted_pose_estimation(camera_in_base, weights)
+        if sum(weights.values()) != 0:
+            camera_in_base_weighted = compute_weighted_pose_estimation(camera_in_base, weights)
+        else:
+            camera_in_base_weighted = np.array([])
 
         # Step 8. Very important (!). Update init_rvecs and init_tvecs for correctly estimated marker poses
         self.last_valid_marker_in_camera_rvec.update(rvecs)
@@ -314,6 +349,8 @@ class PoseSingle:
             camera_in_base_result.mask = False
             camera_in_base_result[0, 3] = self.filtered_state_mean[0]
 
+        # Subtract bias
+        camera_in_base_result[0, 3] -= self.x_bias
         self.camera_in_base = camera_in_base_result
 
         return res_image, camera_in_base_result, weights
@@ -370,6 +407,10 @@ class PoseSingle:
 class PoseMultiple:
     def __init__(self,
                  estimators: list):
+        """
+        Class to perform pose estimation from multiple cameras
+        estimators: list - objects of PoseSingle
+        """
 
         self.estimators = estimators
 
@@ -378,7 +419,13 @@ class PoseMultiple:
                   ):
 
         """
-        Takes list of images with order corresponding to estimators
+        Takes a ndarray of images with order corresponding to estimators
+        Arguments:
+            images: list[np.ndarray] - images
+        Return:
+            mean_pred: list[np.ndarray] of shape (4, 4)
+
+        X - coordinate of camera can be retrieved by mean_pred[0, 3] (!)
         """
 
         preds = []
@@ -389,7 +436,6 @@ class PoseMultiple:
                 preds.append(pred)
 
         mean_pred = np.mean(preds, axis=0)
-
         return mean_pred
 
     def __call__(self, images):

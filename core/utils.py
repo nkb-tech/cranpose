@@ -5,8 +5,12 @@ import sys
 import pickle as pk
 
 
-f_left_x = lambda x: np.tanh(10*(x-0.65)).clip(min=0)
-f_right_x = lambda x: np.tanh(10*(1-x-0.05)).clip(min=0)
+f_left_x_002 = lambda x: np.tanh(10*(x-0.02)).clip(min=0)
+f_right_x_002 = lambda x: np.tanh(10*(1-x-0.02)).clip(min=0)
+
+f_left_x_04 = lambda x: np.tanh(10*(x-0.35)).clip(min=0)
+f_right_x_04 = lambda x: np.tanh(10*(1-x-0.35)).clip(min=0)
+
 f_area = lambda x: x**1.2
 
 
