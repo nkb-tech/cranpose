@@ -36,8 +36,10 @@ class PoseSingle:
                  x_bias: float = 0,
                  size_weight_func: Callable = f_area,
                  left_edge_weight_func: Callable = f_left_x_002,
-                 right_egde_weight_func: Callable = f_right_x_002,
-                 invert_image: bool = False):
+                 right_edge_weight_func: Callable = f_right_x_002,
+                 invert_image: bool = False,
+                 debug: bool = False,
+                 ):
 
         """
         aruco_dict_type: str - тип Аруко маркеров (напр. DICT_4X4_50)
@@ -50,6 +52,11 @@ class PoseSingle:
         apply_kf: bool = True - применять ли фильтр Калмана,
         transition_coef: float = 1 - коэффициент Калман фильтра transition_coef, чем больше, тем быстрее фильтр,
         observation_coef: float = 1 - коэффициент Калман фильтра observation_coef, чем больше, тем медленнее фильтр,
+        size_weight_func: Callable - функция для взвешивания маркеров по их размеру (принимает float от 0 до 1)
+        left_edge_weight_func: Callable - функция для взвешивания маркеров по положению относительно левого края кадра
+         (принимает float от 0 до 1)
+        right_edge_weight_func: Callable - функция для взвешивания маркеров по положению относительно правого края кадра
+         (принимает float от 0 до 1)
         x_bias: float = 0 - сдвиг камеры по X относительно начала координат крана,
         invert_image: bool = False - инвертировать ли картинку
         """
@@ -69,15 +76,16 @@ class PoseSingle:
         self.x_bias = x_bias
         self.size_weight_func = size_weight_func
         self.left_edge_weight_func = left_edge_weight_func
-        self.right_egde_weight_func = right_egde_weight_func
+        self.right_edge_weight_func = right_edge_weight_func
+        self.debug = debug
         # the smaller the transition_coef the slower the filter
         # the smaller the observation_coef the faster the filter
 
         # Initial pose matrix
         self.camera_in_base = np.ma.array([
-            [0, 0, 0, 0],
-            [0, 0, 0, 0],
-            [0, 0, 0, 0],
+            [1, 0, 0, 0],
+            [0, 1, 0, 0],
+            [0, 0, 1, 0],
             [0, 0, 0, 1]
         ])
 
@@ -90,6 +98,14 @@ class PoseSingle:
         else:
             self.camera_in_base.mask = False
             self.kf = None
+
+        if debug:
+            self.camera_in_base_nofilter = np.ma.array([
+                [1, 0, 0, 0],
+                [0, 1, 0, 0],
+                [0, 0, 1, 0],
+                [0, 0, 0, 1]
+            ])
 
     def init_kf(self):
         # time step
@@ -227,7 +243,7 @@ class PoseSingle:
     def weighted_inference_ext_guess(
             self, image: np.ndarray,
             return_frame: bool = False
-    ) -> tuple[np.ndarray, np.ndarray, dict[float]]:
+    ) -> tuple[np.ndarray, np.ndarray, dict[float]] | tuple[np.ndarray, np.ndarray, np.ndarray, dict[float]]:
         """
         Takes image from camera and proceeds pose estimation in base coordinate system.
 
@@ -289,7 +305,7 @@ class PoseSingle:
             *image.shape[:2],
             weight_func_area=self.size_weight_func,
             weight_func_left_edge=self.left_edge_weight_func,
-            weight_func_right_edge=self.right_egde_weight_func,
+            weight_func_right_edge=self.right_edge_weight_func,
         )
         # Step 7. Compute weighted pose
         if sum(weights.values()) != 0:
@@ -327,6 +343,8 @@ class PoseSingle:
         if camera_in_base_weighted.size == 0:  # if marker is not detected
             # we set 'result' to be previous pose (basically to keep shape)
             camera_in_base_result = self.camera_in_base
+            # if self.debug:
+            #     camera_in_base_result_nofilter = self.camera_in_base_nofilter
             # and set mask = True, which omits all values from the matrix:
             if self.apply_kf:  # Maybe it is reasonable to mask the estimation only is we're using kf
                 camera_in_base_result.mask = True
@@ -335,6 +353,8 @@ class PoseSingle:
             # we update the result estimation
             camera_in_base_result = np.ma.asarray(camera_in_base_weighted)
             camera_in_base_result.mask = False
+            if self.debug:
+                self.camera_in_base_nofilter = np.ma.asarray(camera_in_base_weighted)
             # self.camera_in_base = camera_in_base_result
 
         # Apply Kalman-filter
@@ -353,7 +373,11 @@ class PoseSingle:
         camera_in_base_result[0, 3] -= self.x_bias
         self.camera_in_base = camera_in_base_result
 
-        return res_image, camera_in_base_result, weights
+        if self.debug:
+            return res_image, camera_in_base_result, self.camera_in_base_nofilter, weights
+
+        else:
+            return res_image, camera_in_base_result, weights
 
     def __call__(self, image, return_frame=False):
         return self.weighted_inference_ext_guess(image, return_frame)
@@ -414,9 +438,10 @@ class PoseMultiple:
 
         self.estimators = estimators
 
-    def inference(self,
-                  images: list[np.ndarray],
-                  ):
+    def inference(
+            self,
+            images: list[np.ndarray],
+    ) -> np.ndarray | tuple[np.ndarray, list, list]:
 
         """
         Takes a ndarray of images with order corresponding to estimators
@@ -429,14 +454,27 @@ class PoseMultiple:
         """
 
         preds = []
+        debug_preds_weights = []
+        debug_preds = []
+        debug = False
+
         for image, estimator in zip(images, self.estimators):
 
-            _, pred, _ = estimator(image)
+            _, pred, weights = estimator(image)
+            if estimator.debug or debug:
+                debug = True
+                debug_preds.append(pred)
+                debug_preds_weights.append(weights)
+
             if pred.shape:
                 preds.append(pred)
 
         mean_pred = np.mean(preds, axis=0)
-        return mean_pred
+
+        if debug:
+            return mean_pred, debug_preds, debug_preds_weights
+        else:
+            return mean_pred
 
     def __call__(self, images):
         return self.inference(images)
