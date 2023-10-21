@@ -59,6 +59,10 @@ class PoseSingle:
          (принимает float от 0 до 1)
         x_bias: float = 0 - сдвиг камеры по X относительно начала координат крана,
         invert_image: bool = False - инвертировать ли картинку
+        debug: bool = False, влючение дебаг режима. в нем, эстимейтор будет возвращать и предсказание с калман фильтром
+            и без него. Помимо этого, объект PoseMultiple, который инициализован хобя бы с одним объектом
+            PoseSingle, у которого debug=True, будет возвращать не одну матрцу а кортеж из трех элементов:
+            mean_pred, debug_preds, debug_preds_weights
         """
 
         self.aruco_dict_type = aruco_dict_type
@@ -71,17 +75,15 @@ class PoseSingle:
         self.last_valid_marker_in_camera_tvec = {}  # same : tvec
         self.invert_image = invert_image
         self.apply_kf = apply_kf
-        self.transition_coef = transition_coef
-        self.observation_coef = observation_coef
+        self.transition_coef = transition_coef  # the smaller the transition_coef the slower the filter
+        self.observation_coef = observation_coef  # the smaller the observation_coef the faster the filter
         self.x_bias = x_bias
         self.size_weight_func = size_weight_func
         self.left_edge_weight_func = left_edge_weight_func
         self.right_edge_weight_func = right_edge_weight_func
         self.debug = debug
-        # the smaller the transition_coef the slower the filter
-        # the smaller the observation_coef the faster the filter
 
-        # Initial pose matrix
+        #  initial pose matrix
         self.camera_in_base = np.ma.array([
             [1, 0, 0, 0],
             [0, 1, 0, 0],
@@ -149,96 +151,6 @@ class PoseSingle:
             observation_covariance=R,
             initial_state_mean=X0,
             initial_state_covariance=P0)
-
-    # def inference(self, image: np.ndarray, timestamp: datetime, return_frame=False) -> tuple[
-    #     np.ndarray,
-    #     np.ndarray,
-    #     datetime,
-    #     float
-    # ]:
-    #     """
-    #     Arguments
-    #     image:
-    #     timestamp:
-    #     return_frame:
-    #
-    #     Returns:
-    #     frame,
-    #     camera_poses_in_base - array 4x4,
-    #     timestamp,
-    #     largest_marker_size
-    #     """
-    #     frame, detected_marker_poses, largest_marker_size = estimate_marker_poses_in_camera(
-    #         image,
-    #         self.aruco_dict_type,
-    #         self.marker_edge_len,
-    #         self.matrix_coefficients,
-    #         self.distortion_coefficients,
-    #         return_frame)
-    #
-    #     # print(detected_marker_poses)
-    #
-    #     if detected_marker_poses == {}:
-    #         return frame, np.array(1), timestamp, largest_marker_size
-    #
-    #     camera_poses_in_base = estimate_camera_pose_in_base_old(self.all_marker_poses, detected_marker_poses)
-    #
-    #     # print(camera_poses_in_base)
-    #
-    #     if return_frame:
-    #         return frame, np.mean(list(camera_poses_in_base.values()), axis=0), timestamp, largest_marker_size
-    #     else:
-    #         return np.array(0), np.mean(list(camera_poses_in_base.values()), axis=0), timestamp, largest_marker_size
-    #
-    # def weighted_inference(self, image: np.ndarray, timestamp: datetime, return_frame=False) -> tuple[
-    #     np.ndarray,
-    #     np.ndarray,
-    #     datetime,
-    #     float
-    # ]:
-    #     """
-    #         Arguments
-    #         image:
-    #         timestamp:
-    #         return_frame:
-    #
-    #         Returns:
-    #         frame,
-    #         camera_poses_in_base - array 4x4,
-    #         timestamp,
-    #         largest_marker_size
-    #         """
-    #     frame, detected_marker_poses, weights = estimate_marker_poses_in_camera_weighted(
-    #         image,
-    #         self.aruco_dict_type,
-    #         self.marker_edge_len,
-    #         self.matrix_coefficients,
-    #         self.distortion_coefficients,
-    #         return_frame=return_frame,
-    #         # use_extrinsic_guess=True,
-    #         # rvec=self.last_valid_marker_in_camera_rvec,
-    #         # tvec=self.last_valid_marker_in_camera_rvec,
-    #     )
-    #
-    #     # print(detected_marker_poses)
-    #
-    #     if detected_marker_poses == {}:
-    #         return frame, np.array(1), timestamp, weights
-    #
-    #     camera_poses_in_base = estimate_camera_pose_in_base_weighted(
-    #         self.all_marker_poses,
-    #         detected_marker_poses,
-    #         weights
-    #     )
-    #
-    #     # print(type(camera_poses_in_base['weighted']))
-    #     if camera_poses_in_base['weighted'].size == 0:
-    #         return frame, np.array(1), timestamp, weights
-    #
-    #     if return_frame:
-    #         return frame, np.mean(list(camera_poses_in_base.values()), axis=0), timestamp, weights
-    #     else:
-    #         return np.array(0), np.mean(list(camera_poses_in_base.values()), axis=0), timestamp, weights
 
     def weighted_inference_ext_guess(
             self, image: np.ndarray,
@@ -343,8 +255,6 @@ class PoseSingle:
         if camera_in_base_weighted.size == 0:  # if marker is not detected
             # we set 'result' to be previous pose (basically to keep shape)
             camera_in_base_result = self.camera_in_base
-            # if self.debug:
-            #     camera_in_base_result_nofilter = self.camera_in_base_nofilter
             # and set mask = True, which omits all values from the matrix:
             if self.apply_kf:  # Maybe it is reasonable to mask the estimation only is we're using kf
                 camera_in_base_result.mask = True
@@ -383,51 +293,6 @@ class PoseSingle:
         return self.weighted_inference_ext_guess(image, return_frame)
 
 
-# class PoseMultiple(PoseSingle):
-#     def __init__(self,
-#                  n_frames: int,
-#                  aruco_dict_type: str,
-#                  n_markers: int,
-#                  marker_step: float,
-#                  marker_edge_len: float,
-#                  matrix_coefficients: np.ndarray,
-#                  distortion_coefficients: np.ndarray,
-#                  timestamp_threshold: float = 0.1):
-#
-#         super(PoseMultiple, self).__init__(aruco_dict_type,
-#                                            n_markers,
-#                                            marker_step,
-#                                            marker_edge_len,
-#                                            matrix_coefficients,
-#                                            distortion_coefficients)
-#
-#         self.n_frames = n_frames
-#         self.timestamp_threshold = timestamp_threshold
-#
-#     def inference(self,
-#                   images: list[np.ndarray],
-#                   timestamps: list[datetime],
-#                   return_frame=False) -> tuple[list[tuple[np.ndarray, np.ndarray, datetime, float]] | None, datetime]:
-#
-#         # return_frame=False is here for consistency of method signature.
-#         # this method will not return a frame.
-#         if (np.max(timestamps) - np.min(timestamps)) < self.timestamp_threshold:
-#             # preds = np.array(
-#             #     [super(PoseMultiple, self).inference(image, timestamp, return_frame)
-#             #      for image, timestamp in zip(images, timestamps)]
-#             # )
-#             preds = [super(PoseMultiple, self).inference(image, timestamp, return_frame)
-#                      for image, timestamp in zip(images, timestamps)]
-#         else:
-#             preds = None
-#
-#         return preds, timestamps[0]
-#
-#     def __call__(self, images, timestamps, return_frame=False):
-#         # return_frame=False is here for consistency of method signature.
-#         # this method will not return a frame.
-#         return self.inference(images, timestamps, False)
-
 class PoseMultiple:
     def __init__(self,
                  estimators: list):
@@ -460,14 +325,21 @@ class PoseMultiple:
 
         for image, estimator in zip(images, self.estimators):
 
-            _, pred, weights = estimator(image)
-            if estimator.debug or debug:
+            if estimator.debug:
+                _, pred, debug_pred, weights = estimator(image)
+
                 debug = True
+                if pred.shape:
+                    preds.append(pred)
                 debug_preds.append(pred)
                 debug_preds_weights.append(weights)
 
-            if pred.shape:
-                preds.append(pred)
+            else:
+                _, pred, weights = estimator(image)
+
+
+                if pred.shape:
+                    preds.append(pred)
 
         mean_pred = np.mean(preds, axis=0)
 
