@@ -49,7 +49,7 @@ class PoseSingle:
         aruco_dict_type: str,
         camera_orientation: int,
         n_markers: int,
-        marker_step: float,
+        marker_poses: float,
         marker_edge_len: float,
         matrix_coefficients: np.ndarray,
         distortion_coefficients: np.ndarray,
@@ -68,7 +68,7 @@ class PoseSingle:
         self.marker_edge_len = marker_edge_len
         self.matrix_coefficients = matrix_coefficients
         self.distortion_coefficients = distortion_coefficients
-        self.all_marker_poses = create_marker_mtcs(n_markers, marker_step)
+        self.all_marker_poses = create_marker_mtcs(n_markers, marker_poses)
         self.last_valid_marker_in_camera_rvec = {
         }  # key - marker id: value - rvec
         self.last_valid_marker_in_camera_tvec = {}  # same : tvec

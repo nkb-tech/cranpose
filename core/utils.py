@@ -159,13 +159,18 @@ def create_marker_imgs(savedir, dict_type, marker_size, n_markers) -> None:
         cv2.imwrite(tag_name, tag)
 
 
-def create_marker_mtcs(n_markers, step, save=False, savedir=None) -> dict:
+def create_marker_mtcs(n_markers,
+                       marker_poses,
+                       save=False,
+                       savedir=None) -> dict:
     # savedir = 'demo_tags'
     # n_markers = 3
     # step = 2.095
 
     # Вычисление систем координат маркеров в системе координат базы
-    X, Y, Z = (np.linspace(0, n_markers*step, n_markers, endpoint=False), np.zeros(n_markers), np.zeros(n_markers))
+
+    X, Y, Z = (np.array(list(marker_poses.values())),
+               np.zeros(n_markers), np.zeros(n_markers))
 
     def M_X(a):
         c, s = np.cos(a), np.sin(a)
@@ -175,8 +180,8 @@ def create_marker_mtcs(n_markers, step, save=False, savedir=None) -> dict:
 
     def M_Y(a):
         c, s = np.cos(a), np.sin(a)
-        return np.array([[ c,  0,  s],
-                         [ 0,  1,  0],
+        return np.array([[c,  0,  s],
+                         [0,  1,  0],
                          [-s,  0,  c]])
 
     def M_Z(a):
@@ -228,20 +233,22 @@ def custom_estimatePoseSingleMarkers(corners, marker_size, mtx, distortion):
 
     return rvecs, tvecs, trash
 
+
 def draw_markers_on_frame(
-        frame,
-        corners,
-        matrix_coefficients,
-        distortion_coefficients,
-        rvec,
-        tvec,
-        edge_len,
-    ):
+    frame,
+    corners,
+    matrix_coefficients,
+    distortion_coefficients,
+    rvec,
+    tvec,
+    edge_len,
+):
     # Draw a square around the markers
     cv2.aruco.drawDetectedMarkers(frame, corners)
 
     # Draw Axis
-    cv2.aruco.drawAxis(frame, matrix_coefficients, distortion_coefficients, rvec, tvec, edge_len)
+    cv2.drawFrameAxes(frame, matrix_coefficients, distortion_coefficients,
+                      rvec, tvec, edge_len)
 
 
 def draw_weights_on_frame(frame, corners, weights):

@@ -12,7 +12,7 @@ from utils import (ARUCO_DICT, custom_estimatePoseSingleMarkers,
 
 
 def estimate_marker_poses_in_camera(frame: np.ndarray,
-                                    aruco_dict_type: str,
+                                    aruco_dict_type: cv2.aruco.Dictionary,
                                     edge_len: float,
                                     matrix_coefficients: np.ndarray,
                                     distortion_coefficients: np.ndarray,
@@ -43,6 +43,19 @@ def estimate_marker_poses_in_camera(frame: np.ndarray,
         parameters=parameters,
         cameraMatrix=matrix_coefficients,
         distCoeff=distortion_coefficients)
+
+    # dictionary = cv2.aruco.getPredefinedDictionary(aruco_dict_type)
+    # parameters = cv2.aruco.DetectorParameters()
+    # parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+
+    # detector = cv2.aruco.ArucoDetector(dictionary, parameters)
+
+    # # frame = cv.imread(...)
+
+    # corners, ids, rejected_img_points = detector.detectMarkers(
+    #     gray,
+    #     cameraMatrix=matrix_coefficients,
+    #     distCoeff=distortion_coefficients)
 
     # If markers are detected
     # Select markers not close to the edges of the image
@@ -261,12 +274,12 @@ def estimate_marker_poses_in_camera_extrinsic_guess(
 
 
 def detect_markers(
-        frame: np.ndarray,
-        aruco_dict_type: str,
-        matrix_coefficients: np.ndarray,
-        distortion_coefficients: np.ndarray,
-        invert_image: bool = False,
-    ):
+    frame: np.ndarray,
+    aruco_dict_type: str,
+    matrix_coefficients: np.ndarray,
+    distortion_coefficients: np.ndarray,
+    invert_image: bool = False,
+):
     """
     Function detects aruco markers from dict "aruco_dict_type"
     and estimates their poses in camera coordinate system
@@ -282,18 +295,28 @@ def detect_markers(
 
     cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     if invert_image:
-        frame = 255-frame
-    aruco_dict = cv2.aruco.Dictionary_get(aruco_dict_type)
-    parameters = cv2.aruco.DetectorParameters_create()
+        frame = 255 - frame
+    # aruco_dict = cv2.aruco.Dictionary_get(aruco_dict_type)
+    # parameters = cv2.aruco.DetectorParameters_create()
+    # parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+
+    # corners, ids, rejected_img_points = cv2.aruco.detectMarkers(
+    #     frame,
+    #     aruco_dict,
+    #     parameters=parameters,
+    #     cameraMatrix=matrix_coefficients,
+    #     distCoeff=distortion_coefficients)
+
+    dictionary = cv2.aruco.getPredefinedDictionary(aruco_dict_type)
+    parameters = cv2.aruco.DetectorParameters()
     parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
 
-    corners, ids, rejected_img_points = cv2.aruco.detectMarkers(
-        frame,
-        aruco_dict,
-        parameters=parameters,
-        cameraMatrix=matrix_coefficients,
-        distCoeff=distortion_coefficients
-    )
+    detector = cv2.aruco.ArucoDetector(dictionary, parameters)
+
+    corners, ids, rejected_img_points = detector.detectMarkers(
+        frame,)
+        # cameraMatrix=matrix_coefficients,
+        # distCoeff=distortion_coefficients)
 
     if ids is not None:
         ids = ids.reshape(1, -1)[0]

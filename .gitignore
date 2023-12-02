@@ -164,6 +164,11 @@ cython_debug/
 
 .DS_Store
 
-/Kalman-and-Bayesian-Filters-in-Python/
-/pykalman/
-/random/
+Kalman-and-Bayesian-Filters-in-Python/
+pykalman
+random
+data
+demo_tags
+prod_tags
+pykalman_backup
+tags
