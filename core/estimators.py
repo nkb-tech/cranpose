@@ -256,13 +256,16 @@ class PoseSingle:
             # and set mask = True, which omits all values from the matrix:
             # Maybe it is reasonable to mask the estimation
             # only if we're using a kf
-            if self.apply_kf:  
+            if self.apply_kf:
                 camera_in_base_result.mask = True
 
         else:  # if marker is detected
             # we update the result estimation
             camera_in_base_result = np.ma.asarray(camera_in_base_weighted)
             camera_in_base_result.mask = False
+            
+            # Subtract bias
+            camera_in_base_result[0, 3] -= self.x_bias
             if self.debug:
                 self.camera_in_base_nofilter = np.ma.asarray(
                     camera_in_base_weighted)
@@ -279,8 +282,6 @@ class PoseSingle:
             camera_in_base_result.mask = False
             camera_in_base_result[0, 3] = self.filtered_state_mean[0]
 
-        # Subtract bias
-        camera_in_base_result[0, 3] -= self.x_bias
         self.camera_in_base = camera_in_base_result
 
         if self.debug:
