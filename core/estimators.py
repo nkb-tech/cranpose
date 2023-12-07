@@ -318,29 +318,33 @@ class PoseMultiple:
         X - coordinate of camera can be retrieved by mean_pred[0, 3] (!)
         """
 
-        preds = []
         debug_preds_weights = []
         debug_preds = []
         debug = False
-
+        preds = []
         for image, estimator in zip(images, self.estimators):
 
-            if estimator.debug:
-                _, pred, debug_pred, weights = estimator(image)
+            if image is not None:
 
-                debug = True
-                if pred.shape:
-                    preds.append(pred)
-                debug_preds.append(pred)
-                debug_preds_weights.append(weights)
+                if estimator.debug:
+                    _, pred, debug_pred, weights = estimator(image)
 
-            else:
-                _, pred, weights = estimator(image)
+                    debug = True
+                    if pred.shape:
+                        preds.append(pred)
+                    debug_preds.append(pred)
+                    debug_preds_weights.append(weights)
 
-                if pred.shape:
-                    preds.append(pred)
+                else:
+                    _, pred, weights = estimator(image)
 
-        mean_pred = np.mean(preds, axis=0)
+                    if pred.shape:
+                        preds.append(pred)
+
+        if preds != []:
+            mean_pred = np.mean(preds, axis=0)
+        else:
+            mean_pred = np.eye(4)
 
         if debug:
             return mean_pred, debug_preds, debug_preds_weights
