@@ -1,6 +1,17 @@
 *** 
 # ArUCo positioning v0.1
 ***
+## Installation guide
+```
+git clone https://github.com/nkb-tech/cranpose.git
+cd cranpose
+pip install .
+```
+or for development mode
+```
+pip install -e .
+```
+
 ## Basic usage:
 1. Generate marker images with generate_markers.ipynb
 2. Calibrate camera using calc_camera_matrix.ipynb
