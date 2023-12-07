@@ -49,7 +49,7 @@ class PoseSingle:
         aruco_dict_type: str,
         camera_orientation: int,
         n_markers: int,
-        marker_poses: float,
+        marker_poses: dict,
         marker_edge_len: float,
         matrix_coefficients: np.ndarray,
         distortion_coefficients: np.ndarray,

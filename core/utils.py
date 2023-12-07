@@ -190,12 +190,12 @@ def create_marker_mtcs(n_markers,
                          [s,  c,  0],
                          [0,  0,  1]])
 
+    a = -90 * 3.1415 / 180  # угол поворота
+    M = M_X(a)  # только одно вращение вокруг оси X
 
-    a = -90 * 3.1415/180 # угол поворота
-    M = M_X(a) # только одно вращение вокруг оси X
-
-    marker_poses = [np.vstack([np.column_stack([M, np.array([x, y, z])]), [0, 0, 0, 1]]) for x, y, z in zip(X, Y, Z)]
-    marker_poses_dict = dict(zip(range(n_markers), marker_poses))
+    marker_pose_mtcs = [np.vstack([np.column_stack([M, np.array([x, y, z])]),
+                                   [0, 0, 0, 1]]) for x, y, z in zip(X, Y, Z)]
+    marker_poses_dict = dict(zip(list(marker_poses.keys()), marker_pose_mtcs))
 
     if save:
         with open(f"{savedir}/marker_poses.pk", "wb") as f:
