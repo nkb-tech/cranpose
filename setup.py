@@ -11,7 +11,7 @@ setup(
         'matplotlib>=3.7.3',
         'pykalman @ git+https://github.com/pykalman/pykalman@8d3f8e4',
     ],
-    author='Vyacheslav Martynov, NKBTech',
+    author='Viacheslav Martynov, NKBTech',
     packages=find_packages(
         where='cranpose',
     )   
