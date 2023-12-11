@@ -14,5 +14,5 @@ setup(
     author='Viacheslav Martynov, NKBTech',
     packages=find_packages(
         where='cranpose',
-    )   
+    )
 )
