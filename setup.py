@@ -12,9 +12,5 @@ setup(
         # 'pykalman @ git+https://github.com/pykalman/pykalman@8d3f8e4',
     ],
     author='Viacheslav Martynov, NKBTech',
-    packages=find_packages(
-        where='cranpose',
-    )
-    author='Vyacheslav Martynov, NKBTech',
-    packages=find_packages()   
+    packages=find_packages()
 )

@@ -5,6 +5,9 @@ import sys
 import cv2
 import numpy as np
 
+from scipy import sparse
+from typing import Tuple
+
 f_left_x_002 = lambda x: np.tanh(10*(x-0.02)).clip(min=0)
 f_right_x_002 = lambda x: np.tanh(10*(1-x-0.02)).clip(min=0)
 
@@ -254,9 +257,6 @@ def draw_markers_on_frame(
 def draw_weights_on_frame(frame, corners, weights):
     font = cv2.FONT_HERSHEY_SIMPLEX
 
-    # print(frame.shape[0])
-    # print(corners[3][0][:, 1])
-    # print(corners)
     for id in corners:
         org = (int(np.mean(corners[id][0][:, 0])), frame.shape[0] - 100)
         font_scale = 3
@@ -266,6 +266,7 @@ def draw_weights_on_frame(frame, corners, weights):
                             font_scale, color, thickness, cv2.LINE_AA)
 
     return frame
+
 
 def custom_estimatePoseSingleMarkers_use_extrinsic_guess(
         corners,
@@ -344,3 +345,167 @@ def flip_z_axis_neg_det(mtx):
 
 def poly_area(x: np.ndarray, y: np.ndarray) -> float:
     return 0.5*np.abs(np.dot(x, np.roll(y, 1))-np.dot(y, np.roll(x, 1)))
+
+
+def patch_img(img, nrows, ncols):
+    rows_img = np.array_split(img, nrows, axis=0)
+    patches = np.stack([np.array_split(i, ncols, axis=1) for i in rows_img])
+    return patches
+
+
+class Image2Patch():
+    def __init__(
+        self,
+        dims: Tuple[int],
+        bins: Tuple[int],
+    ) -> None:
+        '''
+        Inputs:
+            dims - dimensions of an image (H, W)
+            bins - dimensions of a patch (h, w)
+        '''
+
+        assert len(dims) == len(bins)
+
+        self.dims = dims
+        self.bins = bins
+
+        self.ranges = [
+            np.linspace(0, dims[i], bins[i] + 1)
+            for i in range(len(dims))
+        ]
+        
+        self.n_all_patches = np.prod(self.bins)
+
+    def transform_image2patch(
+        self,
+        ij: np.ndarray,
+    ) -> np.ndarray:
+
+        '''
+        Inputs:
+            ij: np.ndarray - coordinates on image (N, 2)
+        Outputs:
+            out: np.ndarray - coordinates on patch (N, 2)
+        '''
+
+        assert len(self.ranges) == len(ij), \
+            f'Len ij should be {len(self.ranges)}, got {len(ij)}'
+
+        out = np.stack([
+            np.digitize(ij[i], self.ranges[i]) - 1
+            for i in range(len(ij))
+        ])
+
+        return out
+    
+    def find_difference(
+        self,
+        kp1: np.ndarray,
+        kp2: np.ndarray,
+    ) -> np.ndarray:
+
+        '''
+        Inputs:
+            kp1: np.ndarray - kp coordinates on current image (2, N)
+            kp2: np.ndarray - kp coordinates on next image (2, N)
+        Outputs:
+            diff: np.ndarray - difference between coordinates (N, )
+        '''
+
+        return np.linalg.norm(kp2 - kp1, axis=0)
+
+    def _aggregate(
+        self,
+        data: np.ndarray,
+        indices: np.ndarray,
+    ) -> np.ndarray:
+
+        out = sparse.csr_matrix(
+            arg1=(
+                data,  # data
+                indices,  # indices
+                np.arange(data.shape[0]+1),  # indptr
+            ),
+            shape=(data.shape[0], self.n_all_patches),
+        ).sum(0).A1
+
+        return out
+
+    def clasterize_kp_to_patch(
+        self,
+        kp1: np.ndarray,
+        kp2: np.ndarray,
+        diff_eps: float = 1e0,
+        return_indices: bool = False,
+    ) -> Tuple[np.ndarray]:
+
+        '''
+        Inputs:
+            kp1: np.ndarray - kp coordinates on current image (N, 2)
+            kp2: np.ndarray - kp coordinates on next image (N, 2)
+        Outputs:
+            out: np.ndarray - coordinates on patch
+        '''
+
+        # (N, 2) -> (2, N)
+        kp1 = kp1.T
+        kp2 = kp2.T
+
+        # 2xN patch coordinates to 1xN notation
+        # because we need to claster it by 1D vector
+        # it is much easyer
+        kp1_patch_1d = np.ravel_multi_index(
+            multi_index=self.transform_image2patch(kp1.astype(int)),
+            dims=self.bins,
+            mode='clip',
+        )
+
+        # compute difference in each point
+        diff = self.find_difference(kp1, kp2)
+
+        # accumulate differences in the same coordinates
+        # shape: nrows*ncols
+        acc_patch = self._aggregate(diff, kp1_patch_1d)
+        entries_patch = self._aggregate(np.ones_like(diff), kp1_patch_1d)
+
+        n_free_patches = np.count_nonzero(entries_patch == 0)
+
+        # take mean in each patch, inplace op
+        np.divide(
+            acc_patch, entries_patch,
+            out=acc_patch,
+            where=entries_patch != 0,
+            dtype=acc_patch.dtype,
+        )
+
+        # criterion
+        out = acc_patch > diff_eps
+
+        if return_indices:
+
+            # 1D to 2D notation
+            out = np.unravel_index(
+                indices=out.nonzero()[0],
+                shape=self.bins,
+            )
+
+        return out, n_free_patches
+
+
+def draw_img_grid(imgs, sep=2):
+    shape = imgs.shape
+    if len(shape) == 3:
+        nrows, ncols, h, w, c = 1, 1, *shape
+        imgs = imgs.expand_dims(axis=[0, 1])
+    elif len(shape) == 4:
+        nrows, ncols, h, w, c = 1, *shape
+        imgs = imgs.expand_dims(axis=0)
+    elif len(shape) == 5:
+        nrows, ncols, h, w, c = shape
+    grid = np.zeros((nrows*h, ncols*w, c), dtype=imgs.dtype)
+    for i in range(nrows):
+        for j in range(ncols):
+            grid[i*h:(i+1)*h-sep,
+                 j*w:(j+1)*w-sep] = imgs[i, j, :-sep, :-sep]
+    return grid

@@ -311,8 +311,31 @@ def detect_markers(
     parameters = cv2.aruco.DetectorParameters()
     parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
 
-    detector = cv2.aruco.ArucoDetector(dictionary, parameters)
+    # Exps:
+    # parameters.useAruco3Detection = False
+    # parameters.polygonalApproxAccuracyRate = 0.25
 
+    # parameters.minOtsuStdDev = 14.0
+
+    # parameters.adaptiveThreshConstant = 7.0
+    # parameters.adaptiveThreshWinSizeMin = 7
+    # parameters.adaptiveThreshWinSizeStep = 49
+    # parameters.adaptiveThreshWinSizeMax = 369
+
+    # parameters.minMarkerDistanceRate = 0.014971725679291437
+    # parameters.maxMarkerPerimeterRate = 10.075976700411534
+    # parameters.minMarkerPerimeterRate = 0.2524866841549599
+    # parameters.polygonalApproxAccuracyRate = 0.05562707541937206
+    # parameters.cornerRefinementWinSize = 9
+    # parameters.minCornerDistanceRate = 0.09167132584946237
+
+    # parameters.minDistanceToBorder = 7
+    # parameters.cornerRefinementMaxIterations = 149
+
+    # print(parameters.polygonalApproxAccuracyRate)
+
+    detector = cv2.aruco.ArucoDetector(dictionary, parameters)
+    # print(dir(detector.getDetectorParameters()))
     corners, ids, rejected_img_points = detector.detectMarkers(
         frame,)
         # cameraMatrix=matrix_coefficients,

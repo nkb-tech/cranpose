@@ -3,13 +3,15 @@ from typing import Callable
 
 import numpy as np
 from .campose import (check_wrong_estimations, compute_marker_weights,
-                     compute_weighted_pose_estimation, detect_markers,
-                     estimate_camera_pose_in_base,
-                     estimate_camera_pose_in_markers,
-                     estimate_marker_poses_in_camera_extrinsic_guess)
+                      compute_weighted_pose_estimation, detect_markers,
+                      estimate_camera_pose_in_base,
+                      estimate_camera_pose_in_markers,
+                      estimate_marker_poses_in_camera_extrinsic_guess)
 from pykalman import KalmanFilter
 from .utils import (create_marker_mtcs, draw_markers_on_frame,
-                   draw_weights_on_frame, f_area, f_left_x_002, f_right_x_002)
+                    draw_weights_on_frame, f_area, f_left_x_002, f_right_x_002)
+
+from .cammovement import CameraMovement, AbsdiffComparison
 
 
 class PoseSingle:
@@ -60,6 +62,8 @@ class PoseSingle:
         size_weight_func: Callable = f_area,
         left_edge_weight_func: Callable = f_left_x_002,
         right_edge_weight_func: Callable = f_right_x_002,
+        camera_movement: CameraMovement | None = None,
+        n_init_frames: int = 10,
         invert_image: bool = False,
         debug: bool = False,
     ):
@@ -80,7 +84,12 @@ class PoseSingle:
         self.size_weight_func = size_weight_func
         self.left_edge_weight_func = left_edge_weight_func
         self.right_edge_weight_func = right_edge_weight_func
+        self.n_init_frames = n_init_frames
+        self.camera_movement = camera_movement
         self.debug = debug
+
+        self.n_frame = 0  # frame index counted until it reaches n_init_frames
+        self.support_frame = None
 
         #  initial pose matrix
         self.camera_in_base = np.ma.array([[1, 0, 0, 0],
@@ -139,7 +148,18 @@ class PoseSingle:
                             initial_state_mean=X0,
                             initial_state_covariance=P0)
 
-    def weighted_inference_ext_guess(
+    def init_camera_movement(self,
+                             nrows=4,
+                             ncols=4,
+                             blur_size=5,
+                             ):
+        ...
+        # kwargs = dict(nrows=nrows, ncols=ncols, blur_size=5, H=h, W=w)
+        # diff = AbsdiffComparison(threshold = 15,
+        #                          movement_perc_threshold = 0.05,
+        #                          **kwargs)
+
+    def estimate_pose(
         self,
         image: np.ndarray,
         return_frame: bool = False
@@ -221,7 +241,7 @@ class PoseSingle:
         else:
             camera_in_base_weighted = np.array([])
 
-        # Step 8. Very important (!). 
+        # Step 8. Very important (!)
         # Update init_rvecs and init_tvecs for correctly estimated marker poses
         self.last_valid_marker_in_camera_rvec.update(rvecs)
         self.last_valid_marker_in_camera_tvec.update(tvecs)
@@ -263,7 +283,7 @@ class PoseSingle:
             # we update the result estimation
             camera_in_base_result = np.ma.asarray(camera_in_base_weighted)
             camera_in_base_result.mask = False
-            
+
             # Subtract bias
             camera_in_base_result[0, 3] -= self.x_bias
             if self.debug:
@@ -291,17 +311,51 @@ class PoseSingle:
         else:
             return res_image, camera_in_base_result, weights
 
-    def __call__(self, image, return_frame=False):
-        return self.weighted_inference_ext_guess(image, return_frame)
+    def inference(self, image, vis_movement=False, vis_detections=False):
+        # General pipeline:
+        # 1. Do camera movement detection
+        # 2. Only if camera is moving do pose estimation
+        if (self.camera_movement is not None) & \
+           (self.n_frame > self.n_init_frames):
+            # calculate if camera is moving
+
+            is_moving, image = self.camera_movement(
+                image, vis_movement)
+
+            print(is_moving)
+
+            if is_moving:
+                # return image, self.camera_in_base, {}
+
+                return self.estimate_pose(image, vis_detections)
+            else:
+                return image, self.camera_in_base, {}
+        # For initial n_init_frames do not calculate camera movement
+        else:
+            self.n_frame += 1
+            self.support_frame = image
+            return self.estimate_pose(image, vis_detections)
+
+    def detect_movement(self, image, return_frame):
+        ...
+
+    def __call__(self, image, vis_movement=False, vis_detections=False):
+        return self.inference(image, vis_movement, vis_detections)
 
 
 class PoseMultiple:
     """
     Class to perform pose estimation from multiple cameras
-    estimators: list - objects of PoseSingle
     """
-    def __init__(self, estimators: list):
-
+    def __init__(self,
+                 estimators: list[PoseSingle],
+                 #  x_biases: list[float]
+                 ) -> None:
+        """
+        Arguments:
+            estimators: list - objects of PoseSingle
+        Return: None
+        """
         self.estimators = estimators
 
     def inference(
