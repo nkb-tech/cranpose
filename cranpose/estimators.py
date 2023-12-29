@@ -16,6 +16,8 @@ from .cammovement import CameraMovement
 from .detectors.deep.stag_decode.detection_engine import DetectionEngine
 from .detectors.deep.deeptag_model_setting import load_deeptag_models
 
+import torch
+
 
 class PoseSingle:
     """
@@ -67,6 +69,8 @@ class PoseSingle:
         right_edge_weight_func: Callable = f_right_x_002,
         camera_movement: CameraMovement | None = None,
         use_deep_detector_stg2: bool = True,
+        deep_detector_checkpoint_dir = "cranpose/detectors/deep/models",
+        deep_detector_device = 'cpu',
         n_init_frames: int = 10,
         invert_image: bool = False,
         debug: bool = False,
@@ -88,6 +92,7 @@ class PoseSingle:
         self.size_weight_func = size_weight_func
         self.left_edge_weight_func = left_edge_weight_func
         self.right_edge_weight_func = right_edge_weight_func
+        self.deep_detector_checkpoint_dir = deep_detector_checkpoint_dir
         self.n_init_frames = n_init_frames
         self.camera_movement = camera_movement
         self.debug = debug
@@ -95,7 +100,15 @@ class PoseSingle:
         self.is_detection = False
 
         if use_deep_detector_stg2:
+            if torch.cuda.is_available():
+                if type(deep_detector_device) == str:
+                    deep_detector_device = torch.device(deep_detector_device)
+                self.deep_detector_device = deep_detector_device
+            else:
+                self.deep_detector_device = 'cpu'
+
             self.deep_detector = self._init_deep_detector()
+
         else:
             self.deep_detector = None
 
@@ -131,15 +144,13 @@ class PoseSingle:
             aruco_dict_type=self.aruco_dict_type)
 
         # a piece of hardcode
-        checkpoint_dir = "cranpose/detectors/deep/models"
+        checkpoint_dir = self.deep_detector_checkpoint_dir
         tag_family = "aruco"
         hamming_dist= 8
 
-        device = 'cpu'
-
         model_detector, model_decoder, device, tag_type, grid_size_cand_list = \
-            load_deeptag_models(tag_family, checkpoint_dir=checkpoint_dir, device=device) 
-
+            load_deeptag_models(tag_family, checkpoint_dir=checkpoint_dir,
+                                device=self.deep_detector_device) 
 
         deep_detector = DetectionEngine(
             model_detector, model_decoder, device, tag_type, grid_size_cand_list,

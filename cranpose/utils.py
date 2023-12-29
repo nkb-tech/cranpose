@@ -280,7 +280,8 @@ def draw_markers_on_frame(
     tvec,
     edge_len,
 ):
-    if type(corners) == np.array:
+    
+    if type(corners) != tuple:
         corners = corners.astype(np.float32) 
     # Draw a square around the markers
     cv2.aruco.drawDetectedMarkers(frame, corners)

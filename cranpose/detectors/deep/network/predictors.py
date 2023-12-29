@@ -129,6 +129,10 @@ class DecoderPredictor:
         return features_pred
 
 def pred_detector_features(model, image_torch, priors, w, h, scale, center_variance, size_variance):
+    # model prediction
+    # print("detector")
+    # print(image_torch.device)
+    # print(next(model.parameters()).is_cuda)
     stages_output = model(image_torch)
         
     init_masks_pred, grid_confidences_pred, grid_locations_pred, grid_vals_pred = stages_output[0:4]
@@ -173,7 +177,9 @@ def pred_detector_features(model, image_torch, priors, w, h, scale, center_varia
 
 
 def pred_decoder_features(model, imgs_torch_2stg, corner_priors, grid_priors, tw, th, center_variance):
-
+    # print("decoder")
+    # print(imgs_torch_2stg.device)
+    # print(next(model.parameters()).is_cuda)
     stages_output_2stg = model(imgs_torch_2stg)    
         
 
