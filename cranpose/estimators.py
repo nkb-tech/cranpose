@@ -1,3 +1,4 @@
+import os
 from copy import deepcopy
 from typing import Callable
 
@@ -17,7 +18,13 @@ from .detectors.deep.stag_decode.detection_engine import DetectionEngine
 from .detectors.deep.deeptag_model_setting import load_deeptag_models
 
 import torch
+import yaml
+from copy import deepcopy
 
+config_filename = os.path.join(os.path.dirname(__file__), "default_config.yaml")
+
+with open(config_filename, encoding='utf8') as f:
+    DEFAULTS = yaml.load(f, Loader=yaml.FullLoader)
 
 class PoseSingle:
     """
@@ -67,7 +74,7 @@ class PoseSingle:
         size_weight_func: Callable = f_area,
         left_edge_weight_func: Callable = f_left_x_002,
         right_edge_weight_func: Callable = f_right_x_002,
-        camera_movement: CameraMovement | None = None,
+        camera_movement: CameraMovement = None,
         use_deep_detector_stg2: bool = True,
         deep_detector_checkpoint_dir = "cranpose/detectors/deep/models",
         deep_detector_device = 'cpu',
@@ -253,9 +260,6 @@ class PoseSingle:
             distortion_coefficients=self.distortion_coefficients,
             invert_image=self.invert_image)
         if ids is not None:
-            # print('im not none')
-            # print(ids)
-            # print(type(corners))
 
             mask = np.array([
                     id in self.all_marker_poses.keys() for id in ids
@@ -272,11 +276,8 @@ class PoseSingle:
             #         ids.pop(i)
             #         corners.pop(i)
             corners_dict = dict(zip(ids, corners))
-            # print(ids)
         else:
-            # print("im none")
 
-            # print(ids)
             corners_dict = {}
 
         # /// Optional detection with deep detector ///
@@ -462,7 +463,7 @@ class PoseSingle:
             is_moving, image = self.camera_movement(
                 image, vis_movement)
 
-            print(is_moving)
+            # print(is_moving)
 
             if is_moving:
                 # return image, self.camera_in_base, {}
@@ -485,6 +486,8 @@ class PoseSingle:
 
 class PoseMultiple:
     """
+    Update NOTE: changed return structure if debug == True!
+
     Class to perform pose estimation from multiple cameras.
 
     Fusing predictions from single estimators:
@@ -500,10 +503,17 @@ class PoseMultiple:
             take a mean of existing predictions
         3.3 All estimators have predictions ->
             take a mean of predictions
+
+    This class is capable of applying Kalman Filter (KF) to the estimation
+    It is STRONGLY RECOMMENDED TO APPLY KF HERE, INSTEAD OF PoseSingle objects
     """
     def __init__(self,
                  estimators: list[PoseSingle],
-                 #  x_biases: list[float]
+                 apply_kf: bool = True,
+                 kf_transition_covariance: np.ndarray =
+                  DEFAULTS['KF']['transition_covariance'],
+                 kf_observation_covariance: np.ndarray =
+                  DEFAULTS['KF']['observation_covariance'],
                  ) -> None:
         """
         Arguments:
@@ -511,6 +521,74 @@ class PoseMultiple:
         Return: None
         """
         self.estimators = estimators
+        self.apply_kf = apply_kf
+
+        # Kalman-Filter initialization
+        self.filtered_state_mean = None
+        self.filtered_state_covariance = None
+        if apply_kf:
+            # self.filtered_state_mean.mask = True
+            self.kf = self._init_kf(kf_transition_covariance, kf_observation_covariance)
+        else:
+            # self.filtered_state_mean.mask = False
+            self.kf = None
+
+
+    def _init_kf(self, kf_transition_covariance, kf_observation_covariance):
+        # time step
+        dt = 1 / 25
+
+        # transition_matrix
+        F = [[1, dt, 0.5 * dt * dt], [0, 1, dt], [0, 0, 1]]
+
+        # observation_matrix
+        H = [1, 0, 0]
+
+        # transition_covariance
+        Q = kf_transition_covariance
+
+        # observation_covariance
+        R = kf_observation_covariance
+
+        # initial_state_mean
+        X0 = [0, 0, 0]
+
+        # initial_state_covariance
+        P0 = [[1e5, 0, 0], [0, 1, 0], [0, 0, 1]]
+
+        self.filtered_state_mean = X0
+        self.filtered_state_covariance = P0
+
+        return KalmanFilter(transition_matrices=F,
+                            observation_matrices=H,
+                            transition_covariance=Q,
+                            observation_covariance=R,
+                            initial_state_mean=X0,
+                            initial_state_covariance=P0)
+    
+    def _kf_step(self, observation):
+        """
+        does predict-update step of the Kalman filter
+        returns estimation or prediction depending of observation presense
+        """
+        # Apply Kalman-filter
+        # IMPORTANT ! We apply Kalman-filter only to "x"
+        # coordinate of the measurements
+
+        # This function returnes ESTIMATION
+        # (estimation = KF(observation, prediction))
+        # if observation.mask == False (observation is available)
+        # otherwise, it returnes PREDICTION, if observation.mask == True
+        # (no observation):
+        self.filtered_state_mean, self.filtered_state_covariance = (
+            self.kf.filter_update(self.filtered_state_mean,
+                                    self.filtered_state_covariance,
+                                    observation=observation[0, 3]))
+        # TODO check if OK:
+        # camera_in_base_result.mask = False
+        observation[0, 3] = self.filtered_state_mean[0]
+        return observation
+
 
     def inference(
         self,
@@ -555,16 +633,18 @@ class PoseMultiple:
                         preds.append(pred)
                     is_detection.append(estimator.is_detection)
 
-        # /// Choosing the most appropriate variant to fuse predictions ///
+        # /// Algorithm to fuse predictions ///
 
         # We have a list of predictions, and list of if there's a detection:
         is_detection = np.array(is_detection)
         # 1 and 2
         if any(is_detection):
-            # print("1,2")
-            # print(is_detection)
+            # Case when detections are available
             preds = np.array(preds)[is_detection]
-            mean_pred = np.mean(preds, axis=0)
+            mean_pred = np.ma.array(np.mean(preds, axis=0))
+            # This tells filter to make an ESTIMATION:
+            mean_pred.mask = False
+                
         else:
             # check which estimators have already made a detection
             initialized_estimators = np.array([
@@ -575,14 +655,18 @@ class PoseMultiple:
                 # print("3.2,3.3")
 
                 preds = np.array(preds)[initialized_estimators]
-                mean_pred = np.mean(preds, axis=0)
+                mean_pred = np.ma.array(np.mean(preds, axis=0))
             else:
-                # print("3.1")
+                mean_pred = np.ma.array(np.eye(4))
+            # This tells filter to make a PREDICTION:
+            mean_pred.mask = True
 
-                mean_pred = np.eye(4)
-            # print(np.all(preds[1].data == np.eye(4)))
-
-
+        if self.apply_kf:
+            filtered_mean_pred = self._kf_step(deepcopy(mean_pred))
+            if debug:
+                debug_mean_pred = mean_pred
+            
+            mean_pred = filtered_mean_pred
 
         # if preds != []:
         #     # if we have AT LEAST one detection, we use only preds with detections
@@ -594,7 +678,7 @@ class PoseMultiple:
         #     mean_pred = np.eye(4)
 
         if debug:
-            return mean_pred, debug_preds, debug_preds_weights
+            return mean_pred, debug_mean_pred, debug_preds, debug_preds_weights
         else:
             return mean_pred
 
