@@ -1,3 +1,6 @@
+"""
+General utils for camera pose estimation, movement detection, drawing, etc.
+"""
 import os
 import pickle as pk
 import sys
@@ -90,6 +93,21 @@ ARUCO_DICT = {
 }
 
 
+def aruco_codebook_by_dict_type(aruco_dict_type):
+    """
+    ArUCo codebooks are used in the deep detector for identifying tags.
+    """
+    dictionary = cv2.aruco.getPredefinedDictionary(aruco_dict_type)
+    bytes = dictionary.bytesList
+
+    codebook = {}
+    for id in range(bytes.shape[0]):
+        bits = cv2.aruco.Dictionary_getBitsFromByteList(
+            np.array([bytes[id, :, :]]), dictionary.markerSize)
+        codebook.update({tuple(bits.flatten()): id})
+    return codebook
+
+
 def aruco_display(corners, ids, rejected, image):
     if len(corners) > 0:
         # flatten the ArUco IDs list
@@ -133,6 +151,22 @@ def display_pose(frame, pose):
     for i, row in enumerate(pose):
         for j, col in enumerate(row):
             org = (50 + 150 * j, 50 + 50 * i)
+            frame = cv2.putText(frame, str("{:.2f}".format(col)), org, font,
+                                font_scale, color, thickness, cv2.LINE_AA)
+
+    return frame
+
+
+def display_pose_multiple(frame, pose):
+    # font
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 1.5
+    color = (106, 148, 204)
+    thickness = 3
+
+    for i, row in enumerate(pose):
+        for j, col in enumerate(row):
+            org = (150 + 150 * j, 350 + 50 * i)
             frame = cv2.putText(frame, str("{:.2f}".format(col)), org, font,
                                 font_scale, color, thickness, cv2.LINE_AA)
 
@@ -246,6 +280,9 @@ def draw_markers_on_frame(
     tvec,
     edge_len,
 ):
+    
+    if type(corners) != tuple:
+        corners = corners.astype(np.float32) 
     # Draw a square around the markers
     cv2.aruco.drawDetectedMarkers(frame, corners)
 
