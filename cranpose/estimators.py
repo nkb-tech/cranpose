@@ -91,7 +91,7 @@ class PoseSingle:
         deep_detector_checkpoint_dir = os.path.join(
             os.path.dirname(__file__),'detectors','deep','models'),
         deep_detector_device = 'cpu',
-        n_init_frames: int = 10,
+        camera_movement_n_init_frames: int = 10,
         invert_image: bool = False,
         debug: bool = False,
     ):
@@ -113,7 +113,7 @@ class PoseSingle:
         self.left_edge_weight_func = left_edge_weight_func
         self.right_edge_weight_func = right_edge_weight_func
         self.deep_detector_checkpoint_dir = deep_detector_checkpoint_dir
-        self.n_init_frames = n_init_frames
+        self.n_init_frames = camera_movement_n_init_frames
         self.camera_movement = camera_movement
         self.debug = debug
 
@@ -241,7 +241,7 @@ class PoseSingle:
         #                          movement_perc_threshold = 0.05,
         #                          **kwargs)
 
-    def detect_markers(self, image: np.ndarray
+    def _detect_markers(self, image: np.ndarray
                        ) -> Tuple[np.array, np.array, np.array, dict]:
 
         # /// Attempt to detect them with the classical method ///
@@ -283,7 +283,106 @@ class PoseSingle:
                 corners_dict = {}
 
         return corners, ids, mask, corners_dict
+    
+    def _filter_out_wrong_estimations(self,
+                                     camera_in_markers,
+                                     corners_dict,
+                                     mtcs,
+                                     rvecs, tvecs):
+        """
+        Filters out incorrect estimations (inplace).
+        Thus, links to original objects should be given to the method
+        """
+        rejected_marker_ids = check_wrong_estimations(
+            camera_in_markers=camera_in_markers,
+            correct_view_dir=self.camera_orientation)
+        try:
+            for marker_id in rejected_marker_ids:
+                corners_dict.pop(marker_id)
+                mtcs.pop(marker_id)
+                rvecs.pop(marker_id)
+                tvecs.pop(marker_id)
+                camera_in_markers.pop(marker_id)
+        except Exception as e:
+            print('A difficult to handle exception:', e)
+            # print(mask)
+            # print(ids)
+            # print(corners)
+            print(corners_dict)
+            print(rejected_marker_ids)
+            print(e)
+            raise Exception
 
+    def _draw_res(self, image,
+                  return_frame,
+                  corners,
+                  corners_dict,
+                  weights,
+                  rvecs,
+                  tvecs):
+        if return_frame:
+            res_image = deepcopy(image)
+            for id, rvec, tvec in zip(weights.keys(), rvecs.values(),
+                                      tvecs.values()):
+                # print(rvec, tvec)
+                draw_markers_on_frame(
+                    frame=res_image,
+                    corners=corners,
+                    matrix_coefficients=self.matrix_coefficients,
+                    distortion_coefficients=self.distortion_coefficients,
+                    rvec=rvec,
+                    tvec=tvec,
+                    edge_len=self.marker_edge_len,
+                )
+
+            res_image = draw_weights_on_frame(
+                res_image,
+                corners_dict,
+                weights,
+            )
+
+        else:
+            res_image = np.array(0)
+        
+        return res_image
+    
+    def _subtract_bias(self, camera_in_base_weighted):
+            if camera_in_base_weighted.size == 0:  # if marker is not detected
+                self.is_detection = False
+                # we set 'result' to be previous pose (basically to keep shape)
+                camera_in_base_result = self.camera_in_base
+                # and set mask = True, which omits all values from the matrix:
+                # Maybe it is reasonable to mask the estimation
+                # only if we're using a kf
+                if self.apply_kf:
+                    camera_in_base_result.mask = True
+
+            else:  # if marker is detected
+                self.is_detection = True
+                # we update the result estimation
+                camera_in_base_result = np.ma.asarray(camera_in_base_weighted)
+                camera_in_base_result.mask = False
+
+                # Subtract bias
+                camera_in_base_result[0, 3] -= self.x_bias
+                if self.debug:
+                    self.camera_in_base_nofilter = np.ma.asarray(
+                        camera_in_base_weighted)
+                # self.camera_in_base = camera_in_base_result
+            return camera_in_base_result
+    
+    def _kf_step(self, camera_in_base_result):
+        # IMPORTANT ! We apply Kalman-filter only to "x" coordinate
+        if self.apply_kf:
+            self.filtered_state_mean, self.filtered_state_covariance = (
+                self.kf.filter_update(self.filtered_state_mean,
+                                      self.filtered_state_covariance,
+                                      observation=camera_in_base_result[0, 3]))
+            # TODO check if OK:
+            # camera_in_base_result.mask = False
+            camera_in_base_result[0, 3] = self.filtered_state_mean[0]
+        return camera_in_base_result
+    
     def estimate_pose(
         self,
         image: np.ndarray,
@@ -318,47 +417,11 @@ class PoseSingle:
                 ]
         """
 
-        # Step 1. Detect markers
+        # /// Step 1. Detect markers ///
 
-        corners, ids, mask, corners_dict = self.detect_markers(image)
+        corners, ids, mask, corners_dict = self._detect_markers(image)
 
-        # corners, ids, rejected_img_points = detect_markers_opencv(
-        #     frame=image,
-        #     aruco_dict_type=self.aruco_dict_type,
-        #     matrix_coefficients=self.matrix_coefficients,
-        #     distortion_coefficients=self.distortion_coefficients,
-        #     invert_image=self.invert_image)
-        # if ids is not None:
-
-        #     mask = np.array([
-        #             id in self.all_marker_poses.keys() for id in ids
-        #         ])
-        #     ids = ids[mask]
-        #     corners = np.array(corners)[mask]
-
-        #     corners_dict = dict(zip(ids, corners))
-        # else:
-
-        #     corners_dict = {}
-
-        # # /// Optional detection with deep detector ///
-        #     # Only if nothing is detected
-        # if self.deep_detector and corners_dict == {}:
-        #     corners, ids = self.deep_detector.inference(
-        #         image=image, detect_scale=None)
-        #     if len(corners) > 0:
-        #         mask = np.array([
-        #                 id in self.all_marker_poses.keys() for id in ids
-        #             ])
-        #         ids = np.array(ids)[mask]
-        #         corners = np.array(corners)[mask]
-
-        #         corners_dict = dict(zip(ids, corners))
-
-        #     if len(corners) == 0:
-        #         corners_dict = {}
-
-        # Step 2. Estimate marker poses in camera
+        # /// Step 2. Estimate marker poses in camera ///
         mtcs, rvecs, tvecs = estimate_marker_poses_in_camera_extrinsic_guess(
             ids=ids,
             corners=corners,
@@ -369,36 +432,19 @@ class PoseSingle:
             init_rvecs=self.last_valid_marker_in_camera_rvec,
             init_tvecs=self.last_valid_marker_in_camera_tvec)
 
-        # Step 3. Estimate camera poses in markers
+        # /// Step 3. Estimate camera poses in markers ///
         camera_in_markers = estimate_camera_pose_in_markers(
             mtcs)  # here we're just inverting matrices
-        # print(camera_in_markers)
 
-        # Step 4. Filter incorrect estimations
-        rejected_marker_ids = check_wrong_estimations(
-            camera_in_markers=camera_in_markers,
-            correct_view_dir=self.camera_orientation)
-        try:
-            for marker_id in rejected_marker_ids:
-                corners_dict.pop(marker_id)
-                mtcs.pop(marker_id)
-                rvecs.pop(marker_id)
-                tvecs.pop(marker_id)
-                camera_in_markers.pop(marker_id)
-        except Exception as e:
-            print('A difficult to handle exception:', e)
-            print(mask)
-            print(ids)
-            print(corners)
-            print(corners_dict)
-            print(rejected_marker_ids)
-            print(e)
-            raise Exception
+        # /// Step 4. Filter incorrect estimations ///
+        self._filter_out_wrong_estimations(
+            camera_in_markers, corners_dict,
+            mtcs, rvecs, tvecs)
 
-        # Step 5. Estimate camera pose in base
+        # /// Step 5. Estimate camera pose in base ///
         camera_in_base = estimate_camera_pose_in_base(self.all_marker_poses,
                                                       camera_in_markers)
-        # Step 6. Assign weights to markers
+        # /// Step 6. Assign weights to markers ///
         weights = compute_marker_weights(
             corners_dict,
             *image.shape[:2],
@@ -407,78 +453,27 @@ class PoseSingle:
             weight_func_right_edge=self.right_edge_weight_func,
         )
 
-        # Step 7. Compute weighted pose
+        # /// Step 7. Compute weighted pose ///
         if sum(weights.values()) != 0:
             camera_in_base_weighted = compute_weighted_pose_estimation(
                 camera_in_base, weights)
         else:
             camera_in_base_weighted = np.array([])
 
-        # Step 8. Very important (!)
+        # /// Step 8. Very important (!) ///
         # Update init_rvecs and init_tvecs for correctly estimated marker poses
         self.last_valid_marker_in_camera_rvec.update(rvecs)
         self.last_valid_marker_in_camera_tvec.update(tvecs)
 
-        if return_frame:
-            res_image = deepcopy(image)
-            for id, rvec, tvec in zip(weights.keys(), rvecs.values(),
-                                      tvecs.values()):
-                # print(rvec, tvec)
-                draw_markers_on_frame(
-                    frame=res_image,
-                    corners=corners,
-                    matrix_coefficients=self.matrix_coefficients,
-                    distortion_coefficients=self.distortion_coefficients,
-                    rvec=rvec,
-                    tvec=tvec,
-                    edge_len=self.marker_edge_len,
-                )
+        res_image = self._draw_res(
+            image, return_frame, corners,
+            corners_dict, weights, rvecs, tvecs)
+        
+        # /// Step 9. Subtract bias ///                
+        camera_in_base_result = self._subtract_bias(camera_in_base_weighted)
 
-            res_image = draw_weights_on_frame(
-                res_image,
-                corners_dict,
-                weights,
-            )
-
-        else:
-            res_image = np.array(0)
-
-        if camera_in_base_weighted.size == 0:  # if marker is not detected
-            self.is_detection = False
-            # we set 'result' to be previous pose (basically to keep shape)
-            camera_in_base_result = self.camera_in_base
-            # and set mask = True, which omits all values from the matrix:
-            # Maybe it is reasonable to mask the estimation
-            # only if we're using a kf
-            if self.apply_kf:
-                camera_in_base_result.mask = True
-
-        else:  # if marker is detected
-            self.is_detection = True
-            # we update the result estimation
-            camera_in_base_result = np.ma.asarray(camera_in_base_weighted)
-            camera_in_base_result.mask = False
-
-            # Subtract bias
-            camera_in_base_result[0, 3] -= self.x_bias
-            if self.debug:
-                self.camera_in_base_nofilter = np.ma.asarray(
-                    camera_in_base_weighted)
-            # self.camera_in_base = camera_in_base_result
-
-        # Apply Kalman-filter
-        # IMPORTANT ! We apply Kalman-filter only to "x"
-        # coordinate of the measurements
-        if self.apply_kf:
-            self.filtered_state_mean, self.filtered_state_covariance = (
-                self.kf.filter_update(self.filtered_state_mean,
-                                      self.filtered_state_covariance,
-                                      observation=camera_in_base_result[0, 3]))
-            # TODO check if OK:
-            # camera_in_base_result.mask = False
-            camera_in_base_result[0, 3] = self.filtered_state_mean[0]
-
-        self.camera_in_base = camera_in_base_result
+        # /// Step 10. Apply Kalman-filter ///
+        self.camera_in_base = self._kf_step(camera_in_base_result)
 
         if self.debug:
             return res_image, camera_in_base_result, \
@@ -493,28 +488,60 @@ class PoseSingle:
         General pipeline:
         1. Do camera movement detection
         2. Only if camera is moving do pose estimation
+
+        Arguments:
+            image: np.array 
+            vis_movement: bool - visualise movement or not. if True - use it only 
+                for debug/research, because when movement is visualised,
+                no markers can be detected in further steps
+            vis_detections: bool - visualise detections or not
+        Returnes:
+            Tuple[return of self.estimate_pose, is_camera_moving]
         """
 
         # If camera movement is off
         if self.camera_movement is None:
-            return self.estimate_pose(image, vis_detections)
+            return *self.estimate_pose(image, vis_detections), True
+
 
         # If camera movement is on and initialization period is passed
         if (self.camera_movement is not None) & \
            (self.n_frame > self.n_init_frames):
-            # calculate if camera is moving
-            is_moving, image = self.camera_movement(
-                image, vis_movement)
-            if is_moving:
-                return self.estimate_pose(image, vis_detections)
+            
+            # To overcome possible troubles with Kalman Filter, ignore it when
+            # camera is not moving:
+            if self.apply_kf:
+                # calculate if camera is moving
+                is_moving, image = self.camera_movement(
+                    image, vis_movement)
+                if is_moving:
+                    # if self.debug:
+                    #     res_image, camera_in_base_result, \
+                    #     camera_in_base_nofilter, weights = \
+                    #         self.estimate_pose(image, vis_detections)
+                    # else: 
+                    #     res_image, camera_in_base_result, \
+                    #     weights = self.estimate_pose(image, vis_detections)
+                    return *self.estimate_pose(image, vis_detections), True
+                else:
+                    if self.debug:
+                        return image, self.camera_in_base, self.camera_in_base_nofilter, {}, False
+                    else: 
+                        return image, self.camera_in_base, {}, False
+                    # return image, self.camera_in_base, {}
+
+            # If Klaman filter is OFF for PoseSingle (IT SHOULD BE OFF) ->
+            # still calculate movement, but just to return it further to
+            # PoseMultiple.
             else:
-                return image, self.camera_in_base, {}
-    
+                is_moving, image = self.camera_movement(
+                    image, vis_movement)
+                return *self.estimate_pose(image, vis_detections), is_moving
         # For initial n_init_frames do not calculate camera movement
         else:
             self.n_frame += 1
             self.support_frame = image
-            return self.estimate_pose(image, vis_detections)
+            return *self.estimate_pose(image, vis_detections), True
 
     def detect_movement(self, image, return_frame):
         ...
@@ -619,6 +646,7 @@ class PoseMultiple:
         # if observation.mask == False (observation is available)
         # otherwise, it returnes PREDICTION, if observation.mask == True
         # (no observation):
+
         self.filtered_state_mean, self.filtered_state_covariance = (
             self.kf.filter_update(self.filtered_state_mean,
                                     self.filtered_state_covariance,
@@ -650,12 +678,13 @@ class PoseMultiple:
         debug = False
         preds = []
         is_detection = []
+        is_moving = []
         for image, estimator in zip(images, self.estimators):
 
             if image is not None:
 
                 if estimator.debug:
-                    _, pred, debug_pred, weights = estimator(image)
+                    _, pred, debug_pred, weights, movement = estimator(image)
 
                     debug = True
                     if pred.shape:
@@ -666,11 +695,13 @@ class PoseMultiple:
                     debug_preds_weights.append(weights)
 
                 else:
-                    _, pred, weights = estimator(image)
+                    _, pred, weights, movement = estimator(image)
 
                     if pred.shape:
                         preds.append(pred)
                     is_detection.append(estimator.is_detection)
+                is_moving.append(movement)
+
 
         # /// Algorithm to fuse predictions ///
 
@@ -701,7 +732,21 @@ class PoseMultiple:
             mean_pred.mask = True
 
         if self.apply_kf:
-            filtered_mean_pred = self._kf_step(deepcopy(mean_pred))
+            # If ANY cameras says is moving -> apply Kalman Filter as usual
+            if any(is_moving):
+                filtered_mean_pred = self._kf_step(deepcopy(mean_pred))
+            # If no cameras say they're moving -> 
+            # the action depends on if they detect anything
+            else:
+                # if at least one camera detected a marker -> trust it and
+                # apply Kalman Filter as usual
+                if any(is_detection):
+                    filtered_mean_pred = self._kf_step(deepcopy(mean_pred))
+                # otherwise, if no cameras are detecting, 
+                # and there's no movement -> do neither update nor predict
+                # take unfiltered estimation
+                else:
+                    filtered_mean_pred = mean_pred
             if debug:
                 debug_mean_pred = mean_pred
             
@@ -742,6 +787,8 @@ class PoseSpecial:
         transition_coef: float = 1,
         observation_coef: float = 1,
         z_bias: float = 0,
+        camera_movement: CameraMovement = None,
+        camera_movement_n_init_frames: int = 10,
         invert_image: bool = False,
         debug: bool = False
     ) -> None:
@@ -758,9 +805,11 @@ class PoseSpecial:
         self.apply_kf = apply_kf
         self.transition_coef = transition_coef  # the smaller the slower the filter
         self.observation_coef = observation_coef  # the smaller the faster the filter
+        self.camera_movement = camera_movement
+        self.n_init_frames = camera_movement_n_init_frames
         self.z_bias = z_bias
         self.debug = debug
-
+        self.n_frame = 0
         # initial pose matrix
         self.mtx = np.ma.array([[1, 0, 0, 0],
                                 [0, 1, 0, 0],
@@ -818,7 +867,7 @@ class PoseSpecial:
                             initial_state_mean=X0,
                             initial_state_covariance=P0)
 
-    def inference(
+    def estimate_pose(
         self,
         image: np.ndarray,
         return_frame: bool = False
@@ -932,8 +981,66 @@ class PoseSpecial:
 
         else:
             return res_image, mtx_result
+        
+    def inference(self, image, vis_movement=False, vis_detections=False):
+        """
+        Combines camera movement estimation and pose estimation
+        General pipeline:
+        1. Do camera movement detection
+        2. Only if camera is moving do pose estimation
+
+        Arguments:
+            image: np.array 
+            vis_movement: bool - visualise movement or not. if True - use it only 
+                for debug/research, because when movement is visualised,
+                no markers can be detected in further steps
+            vis_detections: bool - visualise detections or not
+        Returnes:
+            Tuple[return of self.estimate_pose, is_camera_moving]
+        """
+
+        # If camera movement is off
+        if self.camera_movement is None:
+            return *self.estimate_pose(image, vis_detections), True
+
+
+        # If camera movement is on and initialization period is passed
+        if (self.camera_movement is not None) & \
+           (self.n_frame > self.n_init_frames):
+            
+            # To overcome possible troubles with Kalman Filter, ignore it when
+            # camera is not moving:
+            if self.apply_kf:
+                # calculate if camera is moving
+                is_moving, image = self.camera_movement(
+                    image, vis_movement)
+                if is_moving:
+                    # if self.debug:
+                    #     res_image, camera_in_base_result, \
+                    #     camera_in_base_nofilter, weights = \
+                    #         self.estimate_pose(image, vis_detections)
+                    # else: 
+                    #     res_image, camera_in_base_result, \
+                    #     weights = self.estimate_pose(image, vis_detections)
+                    return *self.estimate_pose(image, vis_detections), True
+                else:
+                    if self.debug:
+                        return image, self.camera_in_base, self.camera_in_base_nofilter, {}, False
+                    else: 
+                        return image, self.camera_in_base, {}, False
+                    # return image, self.camera_in_base, {}
+
+            # If Klaman filter is OFF for PoseSpecial ->
+            # then camera movement does no useful job. 
+            # ignore it, and say camera is ALWAYS moving
+            else:
+                return *self.estimate_pose(image, vis_detections), True
+        # For initial n_init_frames do not calculate camera movement
+        else:
+            self.n_frame += 1
+            self.support_frame = image
+            return *self.estimate_pose(image, vis_detections), True
 
     def __call__(self, image, return_frame=False):
         return self.inference(image, return_frame)
 
-# pass
