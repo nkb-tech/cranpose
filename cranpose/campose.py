@@ -1,3 +1,7 @@
+"""
+Utility functions mostly related to camera pose estimation.
+"""
+
 import argparse
 import sys
 import time
@@ -273,7 +277,7 @@ def estimate_marker_poses_in_camera_extrinsic_guess(
     return mtcs, rvecs, tvecs
 
 
-def detect_markers(
+def detect_markers_opencv(
     frame: np.ndarray,
     aruco_dict_type: str,
     matrix_coefficients: np.ndarray,
@@ -311,35 +315,9 @@ def detect_markers(
     parameters = cv2.aruco.DetectorParameters()
     parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
 
-    # Exps:
-    # parameters.useAruco3Detection = False
-    # parameters.polygonalApproxAccuracyRate = 0.25
-
-    # parameters.minOtsuStdDev = 14.0
-
-    # parameters.adaptiveThreshConstant = 7.0
-    # parameters.adaptiveThreshWinSizeMin = 7
-    # parameters.adaptiveThreshWinSizeStep = 49
-    # parameters.adaptiveThreshWinSizeMax = 369
-
-    # parameters.minMarkerDistanceRate = 0.014971725679291437
-    # parameters.maxMarkerPerimeterRate = 10.075976700411534
-    # parameters.minMarkerPerimeterRate = 0.2524866841549599
-    # parameters.polygonalApproxAccuracyRate = 0.05562707541937206
-    # parameters.cornerRefinementWinSize = 9
-    # parameters.minCornerDistanceRate = 0.09167132584946237
-
-    # parameters.minDistanceToBorder = 7
-    # parameters.cornerRefinementMaxIterations = 149
-
-    # print(parameters.polygonalApproxAccuracyRate)
-
     detector = cv2.aruco.ArucoDetector(dictionary, parameters)
-    # print(dir(detector.getDetectorParameters()))
     corners, ids, rejected_img_points = detector.detectMarkers(
         frame,)
-        # cameraMatrix=matrix_coefficients,
-        # distCoeff=distortion_coefficients)
 
     if ids is not None:
         ids = ids.reshape(1, -1)[0]
@@ -571,42 +549,3 @@ def check_wrong_estimations(camera_in_markers, correct_view_dir=-1):
 
     return pop_ids
 
-
-if __name__ == '__main__':
-
-    ap = argparse.ArgumentParser()
-    ap.add_argument("-k", "--K_Matrix", required=True, help="Path to calibration matrix (numpy file)")
-    ap.add_argument("-d", "--D_Coeff", required=True, help="Path to distortion coefficients (numpy file)")
-    ap.add_argument("-t", "--type", type=str, default="DICT_ARUCO_ORIGINAL", help="Type of ArUCo tag to detect")
-    args = vars(ap.parse_args())
-
-    if ARUCO_DICT.get(args["type"], None) is None:
-        print(f"ArUCo tag type '{args['type']}' is not supported")
-        sys.exit(0)
-
-    aruco_dict_type = ARUCO_DICT[args["type"]]
-    calibration_matrix_path = args["K_Matrix"]
-    distortion_coefficients_path = args["D_Coeff"]
-
-    k = np.load(calibration_matrix_path)
-    d = np.load(distortion_coefficients_path)
-
-    video = cv2.VideoCapture(0)
-    time.sleep(2.0)
-
-    while True:
-        ret, frame = video.read()
-
-        if not ret:
-            break
-
-        output = pose_esitmation(frame, aruco_dict_type, k, d)
-
-        cv2.imshow('Estimated Pose', output)
-
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):
-            break
-
-    video.release()
-    cv2.destroyAllWindows()

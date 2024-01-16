@@ -1,3 +1,6 @@
+"""
+Provides classes for camera movement calculation
+"""
 import cv2
 import numpy as np
 from typing import Any, Tuple
@@ -137,14 +140,6 @@ class CameraMovement():
                                                     visualize=draw)
 
             # calculate percentage of moved patches
-            # self.moved_patches_threshold
-            # print(moved_patches)
-
-            # print(moved_patches.shape)
-
-            # print(moved_patches.sum())
-            # print(moved_patches.sum()/(moved_patches.shape[0]*moved_patches.shape[1]))
-
             moved_patches_perc = moved_patches.sum() / \
                 (moved_patches.shape[0]*moved_patches.shape[1])
 

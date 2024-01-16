@@ -1,25 +1,37 @@
+"""
+Provides classes of estimators.
+"""
 import os
+import warnings
 from copy import deepcopy
-from typing import Callable
+from typing import Callable, Tuple
 
 import numpy as np
-from .campose import (check_wrong_estimations, compute_marker_weights,
-                      compute_weighted_pose_estimation, detect_markers,
-                      estimate_camera_pose_in_base,
-                      estimate_camera_pose_in_markers,
-                      estimate_marker_poses_in_camera_extrinsic_guess)
-from pykalman import KalmanFilter
-from .utils import (create_marker_mtcs, draw_markers_on_frame,
-                    draw_weights_on_frame, f_area, f_left_x_002, f_right_x_002,
-                    aruco_codebook_by_dict_type)
-
-from .cammovement import CameraMovement
-from .detectors.deep.stag_decode.detection_engine import DetectionEngine
-from .detectors.deep.deeptag_model_setting import load_deeptag_models
-
 import torch
 import yaml
-from copy import deepcopy
+from pykalman import KalmanFilter
+
+from .cammovement import CameraMovement
+from .campose import (
+    check_wrong_estimations,
+    compute_marker_weights,
+    compute_weighted_pose_estimation,
+    detect_markers_opencv,
+    estimate_camera_pose_in_base,
+    estimate_camera_pose_in_markers,
+    estimate_marker_poses_in_camera_extrinsic_guess,
+)
+from .detectors.deep.deeptag_model_setting import load_deeptag_models
+from .detectors.deep.stag_decode.detection_engine import DetectionEngine
+from .utils import (
+    aruco_codebook_by_dict_type,
+    create_marker_mtcs,
+    draw_markers_on_frame,
+    draw_weights_on_frame,
+    f_area,
+    f_left_x_002,
+    f_right_x_002,
+)
 
 config_filename = os.path.join(os.path.dirname(__file__), "default_config.yaml")
 
@@ -76,7 +88,8 @@ class PoseSingle:
         right_edge_weight_func: Callable = f_right_x_002,
         camera_movement: CameraMovement = None,
         use_deep_detector_stg2: bool = True,
-        deep_detector_checkpoint_dir = "cranpose/detectors/deep/models",
+        deep_detector_checkpoint_dir = os.path.join(
+            os.path.dirname(__file__),'detectors','deep','models'),
         deep_detector_device = 'cpu',
         n_init_frames: int = 10,
         invert_image: bool = False,
@@ -106,6 +119,13 @@ class PoseSingle:
 
         self.is_detection = False
 
+        if camera_movement is not None:
+            warnings.warn("""
+                          Do not use vis_movement = True,
+                          when calling the created object in production.
+                          Use it only for debugging camera movement settings.
+                          """)
+
         if use_deep_detector_stg2:
             if torch.cuda.is_available():
                 if type(deep_detector_device) == str:
@@ -133,6 +153,8 @@ class PoseSingle:
         self.filtered_state_mean = None
         self.filtered_state_covariance = None
         if apply_kf:
+            warnings.warn("""Using KF in PoseSingle object is deprecated
+              and will be completely removed in the future.""")
             self.camera_in_base.mask = True
             self.kf = self._init_kf()
         else:
@@ -173,6 +195,7 @@ class PoseSingle:
         return deep_detector
 
     def _init_kf(self):
+        
         # time step
         dt = 1 / 25
 
@@ -218,6 +241,49 @@ class PoseSingle:
         #                          movement_perc_threshold = 0.05,
         #                          **kwargs)
 
+    def detect_markers(self, image: np.ndarray
+                       ) -> Tuple[np.array, np.array, np.array, dict]:
+
+        # /// Attempt to detect them with the classical method ///
+        corners, ids, rejected_img_points = detect_markers_opencv(
+            frame=image,
+            aruco_dict_type=self.aruco_dict_type,
+            matrix_coefficients=self.matrix_coefficients,
+            distortion_coefficients=self.distortion_coefficients,
+            invert_image=self.invert_image)
+        
+        # Do some postprocessing based on the result
+        if ids is not None:
+            mask = np.array([
+                    id in self.all_marker_poses.keys() for id in ids
+                ])
+            ids = ids[mask]
+            corners = np.array(corners)[mask]
+            corners_dict = dict(zip(ids, corners))
+        else:
+            mask = None
+            corners_dict = {}
+
+        # /// Optional detection with deep detector ///
+        # (only if nothing is detected with the function above)
+        if self.deep_detector and corners_dict == {}:
+            corners, ids = self.deep_detector.inference(
+                image=image, detect_scale=None)
+            if len(corners) > 0:
+                mask = np.array([
+                        id in self.all_marker_poses.keys() for id in ids
+                    ])
+                ids = np.array(ids)[mask]
+                corners = np.array(corners)[mask]
+
+                corners_dict = dict(zip(ids, corners))
+
+            if len(corners) == 0:
+                mask = None
+                corners_dict = {}
+
+        return corners, ids, mask, corners_dict
+
     def estimate_pose(
         self,
         image: np.ndarray,
@@ -253,70 +319,44 @@ class PoseSingle:
         """
 
         # Step 1. Detect markers
-        corners, ids, rejected_img_points = detect_markers(
-            frame=image,
-            aruco_dict_type=self.aruco_dict_type,
-            matrix_coefficients=self.matrix_coefficients,
-            distortion_coefficients=self.distortion_coefficients,
-            invert_image=self.invert_image)
-        if ids is not None:
 
-            mask = np.array([
-                    id in self.all_marker_poses.keys() for id in ids
-                ])
-            ids = ids[mask]
-            corners = np.array(corners)[mask]
-            # corners_dict = dict(
-            #     [(id, corner)
-            #      for id, corner in zip(ids, corners)
-            #      if id in self.all_marker_poses.keys()])
+        corners, ids, mask, corners_dict = self.detect_markers(image)
 
-            # for i, id in enumerate(ids):
-            #     if id not in self.all_marker_poses.keys():
-            #         ids.pop(i)
-            #         corners.pop(i)
-            corners_dict = dict(zip(ids, corners))
-        else:
+        # corners, ids, rejected_img_points = detect_markers_opencv(
+        #     frame=image,
+        #     aruco_dict_type=self.aruco_dict_type,
+        #     matrix_coefficients=self.matrix_coefficients,
+        #     distortion_coefficients=self.distortion_coefficients,
+        #     invert_image=self.invert_image)
+        # if ids is not None:
 
-            corners_dict = {}
-
-        # /// Optional detection with deep detector ///
-            # Only if nothing is detected
-        if self.deep_detector and corners_dict == {}:
-            corners, ids = self.deep_detector.inference(
-                image=image, detect_scale=None)
-            if len(corners) > 0:
-                mask = np.array([
-                        id in self.all_marker_poses.keys() for id in ids
-                    ])
-                ids = np.array(ids)[mask]
-                corners = np.array(corners)[mask]
-
-                corners_dict = dict(zip(ids, corners))
-
-            if len(corners) == 0:
-                corners_dict = {}
-
-        # try:
-        #     # take only ids from total marker list
         #     mask = np.array([
         #             id in self.all_marker_poses.keys() for id in ids
         #         ])
         #     ids = ids[mask]
-        #     corners = corners[mask]
-        #     # corners_dict = dict(
-        #     #     [(id, corner)
-        #     #      for id, corner in zip(ids, corners)
-        #     #      if id in self.all_marker_poses.keys()])
+        #     corners = np.array(corners)[mask]
 
-        #     # for i, id in enumerate(ids):
-        #     #     if id not in self.all_marker_poses.keys():
-        #     #         ids.pop(i)
-        #     #         corners.pop(i)
         #     corners_dict = dict(zip(ids, corners))
-        # except TypeError as e:
-        #     # print(e)
+        # else:
+
         #     corners_dict = {}
+
+        # # /// Optional detection with deep detector ///
+        #     # Only if nothing is detected
+        # if self.deep_detector and corners_dict == {}:
+        #     corners, ids = self.deep_detector.inference(
+        #         image=image, detect_scale=None)
+        #     if len(corners) > 0:
+        #         mask = np.array([
+        #                 id in self.all_marker_poses.keys() for id in ids
+        #             ])
+        #         ids = np.array(ids)[mask]
+        #         corners = np.array(corners)[mask]
+
+        #         corners_dict = dict(zip(ids, corners))
+
+        #     if len(corners) == 0:
+        #         corners_dict = {}
 
         # Step 2. Estimate marker poses in camera
         mtcs, rvecs, tvecs = estimate_marker_poses_in_camera_extrinsic_guess(
@@ -346,6 +386,7 @@ class PoseSingle:
                 tvecs.pop(marker_id)
                 camera_in_markers.pop(marker_id)
         except Exception as e:
+            print('A difficult to handle exception:', e)
             print(mask)
             print(ids)
             print(corners)
@@ -448,29 +489,27 @@ class PoseSingle:
 
     def inference(self, image, vis_movement=False, vis_detections=False):
         """
-        # General pipeline:
-        # 1. Do camera movement detection
-        # 2. Only if camera is moving do pose estimation
+        Combines camera movement estimation and pose estimation
+        General pipeline:
+        1. Do camera movement detection
+        2. Only if camera is moving do pose estimation
         """
 
+        # If camera movement is off
         if self.camera_movement is None:
             return self.estimate_pose(image, vis_detections)
 
+        # If camera movement is on and initialization period is passed
         if (self.camera_movement is not None) & \
            (self.n_frame > self.n_init_frames):
             # calculate if camera is moving
-
             is_moving, image = self.camera_movement(
                 image, vis_movement)
-
-            # print(is_moving)
-
             if is_moving:
-                # return image, self.camera_in_base, {}
-
                 return self.estimate_pose(image, vis_detections)
             else:
                 return image, self.camera_in_base, {}
+    
         # For initial n_init_frames do not calculate camera movement
         else:
             self.n_frame += 1
@@ -801,7 +840,7 @@ class PoseSpecial:
         """
 
         # Step 1. Detect markers
-        corners, ids, rejected_img_points = detect_markers(
+        corners, ids, rejected_img_points = detect_markers_opencv(
             frame=image,
             aruco_dict_type=self.aruco_dict_type,
             matrix_coefficients=self.matrix_coefficients,
