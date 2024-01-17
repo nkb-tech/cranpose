@@ -1041,6 +1041,6 @@ class PoseSpecial:
             self.support_frame = image
             return *self.estimate_pose(image, vis_detections), True
 
-    def __call__(self, image, return_frame=False):
-        return self.inference(image, return_frame)
+    def __call__(self, image, vis_movement=False, vis_detections=False):
+        return self.inference(image, vis_movement, vis_detections)
 
