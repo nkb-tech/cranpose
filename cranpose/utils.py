@@ -93,6 +93,43 @@ ARUCO_DICT = {
 }
 
 
+def crop_poly_fill_bg(image, pts, boundary=10, bgfill=255):
+    ## (1) Crop the bounding rect
+    rect = cv2.boundingRect(pts)
+    x,y,w,h = rect
+    w, h = max(h,w), max(h,w)
+    hi, wi = image.shape[:2]
+
+    croped = image[max(0,y-boundary): min(y+h+boundary, hi),
+                   max(0, x-boundary): min(x+w+boundary, wi)].copy()
+
+    ## (2) make mask
+    # print(pts)
+    pts = pts - pts.min(axis=0) + boundary
+
+    mask = np.zeros(croped.shape[:2], np.uint8)
+    cv2.drawContours(mask, [pts], -1, (255, 255, 255), -1, cv2.LINE_AA)
+
+    ## (3) do bit-op
+    dst = cv2.bitwise_and(croped, croped, mask=mask)
+
+    ## (4) add the white background
+    bg = np.ones_like(croped, np.uint8)*bgfill
+
+
+    # cv2.bitwise_not(bg,bg, mask=mask)
+    # dst2 = bg+ dst
+
+    mask_inv = cv2.bitwise_not(mask)
+    # Now black-out the area of logo in ROI
+    bg = cv2.bitwise_and(bg,bg,mask = mask_inv)
+    # Take only region of logo from logo image.
+    # Put logo in ROI and modify the main image
+    dst2 = cv2.add(bg,dst)
+
+    return croped, mask, dst, dst2
+
+
 def aruco_codebook_by_dict_type(aruco_dict_type):
     """
     ArUCo codebooks are used in the deep detector for identifying tags.

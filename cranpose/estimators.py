@@ -17,6 +17,7 @@ from .campose import (
     compute_marker_weights,
     compute_weighted_pose_estimation,
     detect_markers_opencv,
+    detect_markers_combined_v2,
     estimate_camera_pose_in_base,
     estimate_camera_pose_in_markers,
     estimate_marker_poses_in_camera_extrinsic_guess,
@@ -92,6 +93,7 @@ class PoseSingle:
             os.path.dirname(__file__),'detectors','deep','models'),
         deep_detector_device = 'cpu',
         camera_movement_n_init_frames: int = 10,
+        transform_imgage_in_second_classic_detector: bool = True,
         invert_image: bool = False,
         debug: bool = False,
     ):
@@ -116,6 +118,15 @@ class PoseSingle:
         self.n_init_frames = camera_movement_n_init_frames
         self.camera_movement = camera_movement
         self.debug = debug
+        self.transform_imgage_in_second_classic_detector = \
+            transform_imgage_in_second_classic_detector
+
+        self.adaptiveThreshWinSizeMin = 13
+        self.adaptiveThreshWinSizeMax = 33
+        self.adaptiveThreshWinSizeStep = 10
+        self.adaptiveThreshConstant = 3
+
+        self.detect_function = self._detect_markers_v2
 
         self.is_detection = False
 
@@ -250,6 +261,10 @@ class PoseSingle:
             aruco_dict_type=self.aruco_dict_type,
             matrix_coefficients=self.matrix_coefficients,
             distortion_coefficients=self.distortion_coefficients,
+            adaptiveThreshWinSizeMin = self.adaptiveThreshWinSizeMin,
+            adaptiveThreshWinSizeMax = self.adaptiveThreshWinSizeMax,
+            adaptiveThreshWinSizeStep = self.adaptiveThreshWinSizeStep,
+            adaptiveThreshConstant = self.adaptiveThreshConstant,
             invert_image=self.invert_image)
         
         # Do some postprocessing based on the result
@@ -281,7 +296,63 @@ class PoseSingle:
             if len(corners) == 0:
                 mask = None
                 corners_dict = {}
+        
+        # print(corners, ids)
 
+
+        return corners, ids, mask, corners_dict
+    
+    def _detect_markers_v2(self, image: np.ndarray
+                           ) -> Tuple[np.array, np.array, np.array, dict]:
+
+        # /// Step1. Attempt to detect them with the classical method ///
+        corners, ids, rejected_img_points = detect_markers_opencv(
+            frame=image,
+            aruco_dict_type=self.aruco_dict_type,
+            matrix_coefficients=self.matrix_coefficients,
+            distortion_coefficients=self.distortion_coefficients,
+            adaptiveThreshWinSizeMin = self.adaptiveThreshWinSizeMin,
+            adaptiveThreshWinSizeMax = self.adaptiveThreshWinSizeMax,
+            adaptiveThreshWinSizeStep = self.adaptiveThreshWinSizeStep,
+            adaptiveThreshConstant = self.adaptiveThreshConstant,
+            invert_image=self.invert_image)
+        
+        # Do some postprocessing based on the result
+        if ids is not None:
+            mask = np.array([
+                    id in self.all_marker_poses.keys() for id in ids
+                ])
+            ids = ids[mask]
+            corners = np.array(corners)[mask]
+            corners_dict = dict(zip(ids, corners))
+        else:
+            mask = None
+            corners_dict = {}
+
+        # /// Step 2. Optional detection with deep detector ///
+        # If NO markers have been detected with classical method,
+        # from the whole picture, lets take advantage of a deep detector
+        # and help it
+        if corners_dict == {}:
+            corners, ids = detect_markers_combined_v2(
+                image=image,
+                aruco_dict_type=self.aruco_dict_type,
+                deep_detector=self.deep_detector,
+                transform_imgage_in_second_classic_detector = \
+                    self.transform_imgage_in_second_classic_detector)
+
+            # Do some postprocessing based on the result
+            if ids is not None:
+
+                mask = np.array([
+                        id in self.all_marker_poses.keys() for id in ids
+                    ])
+                ids = ids[mask]
+                corners = np.array(corners)[mask]
+                corners_dict = dict(zip(ids, corners))
+            else:
+                mask = None
+                corners_dict = {}
         return corners, ids, mask, corners_dict
     
     def _filter_out_wrong_estimations(self,
@@ -419,7 +490,7 @@ class PoseSingle:
 
         # /// Step 1. Detect markers ///
 
-        corners, ids, mask, corners_dict = self._detect_markers(image)
+        corners, ids, mask, corners_dict = self.detect_function(image)
 
         # /// Step 2. Estimate marker poses in camera ///
         mtcs, rvecs, tvecs = estimate_marker_poses_in_camera_extrinsic_guess(

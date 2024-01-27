@@ -12,7 +12,8 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 from .utils import (ARUCO_DICT, custom_estimatePoseSingleMarkers,
                    custom_estimatePoseSingleMarkers_use_extrinsic_guess,
-                   f_area, f_left_x_002, f_right_x_002, poly_area)
+                   f_area, f_left_x_002, f_right_x_002, poly_area,
+                   crop_poly_fill_bg)
 
 
 def estimate_marker_poses_in_camera(frame: np.ndarray,
@@ -282,6 +283,10 @@ def detect_markers_opencv(
     aruco_dict_type: str,
     matrix_coefficients: np.ndarray,
     distortion_coefficients: np.ndarray,
+    adaptiveThreshWinSizeMin: int = 3,
+    adaptiveThreshWinSizeMax: int = 33,
+    adaptiveThreshWinSizeStep: int = 5,
+    adaptiveThreshConstant: int = 1,
     invert_image: bool = False,
 ):
     """
@@ -314,15 +319,76 @@ def detect_markers_opencv(
     dictionary = cv2.aruco.getPredefinedDictionary(aruco_dict_type)
     parameters = cv2.aruco.DetectorParameters()
     parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+    parameters.adaptiveThreshWinSizeMin = adaptiveThreshWinSizeMin
+    parameters.adaptiveThreshWinSizeMax = adaptiveThreshWinSizeMax
+    parameters.adaptiveThreshWinSizeStep = adaptiveThreshWinSizeStep
+    parameters.adaptiveThreshConstant = adaptiveThreshConstant
 
     detector = cv2.aruco.ArucoDetector(dictionary, parameters)
     corners, ids, rejected_img_points = detector.detectMarkers(
-        frame,)
+        frame)
 
     if ids is not None:
         ids = ids.reshape(1, -1)[0]
     return corners, ids, rejected_img_points
 
+def detect_markers_combined_v2(
+        image,
+        aruco_dict_type,
+        deep_detector,
+        transform_imgage_in_second_classic_detector):
+
+    dictionary = cv2.aruco.getPredefinedDictionary(aruco_dict_type)
+    parameters = cv2.aruco.DetectorParameters()
+    parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+    parameters.adaptiveThreshWinSizeMin = 31
+    parameters.adaptiveThreshWinSizeMax = 31
+    parameters.adaptiveThreshConstant = 2
+
+    detector = cv2.aruco.ArucoDetector(dictionary, parameters)
+    
+    # /// Step 1. Deep detection stage 1 ///
+    rois_info = deep_detector.process_stage_1(image)
+
+    all_corners = []
+    all_ids = []
+    
+    # /// Step 2. Iterate over rois to find valid markers ///
+
+    for roi_info in rois_info:
+        # Crop
+        # import ipdb; ipdb.set_trace()
+        croped, mask, dst, dst2 = crop_poly_fill_bg(
+            image, 
+            np.array(roi_info['ordered_corners']).astype(int),
+            # roi_info['ordered_corners'],
+            boundary=15, bgfill=155)
+        # Resize
+        resized_dst_2 = cv2.resize(dst2, [220,220])
+        # adjust
+        alpha = 2.5 # Contrast control (1.0-3.0)
+        beta = -150 # Brightness control (0-100)
+
+        adjusted = cv2.convertScaleAbs(cv2.cvtColor(resized_dst_2, cv2.COLOR_BGR2GRAY),
+                                    alpha=alpha, beta=beta)
+
+        # find markers
+        corners, ids, rejected_img_points = detector.detectMarkers(
+            cv2.medianBlur(adjusted,7))
+        
+        # print(corners, ids)
+        if ids is not None:
+            all_corners.append([roi_info['ordered_corners']])
+            all_ids.append(ids[0][0])
+
+    all_corners = np.array(all_corners)
+    
+    if all_ids == []:
+        all_ids = None
+    else:
+        all_ids = np.array(all_ids)
+
+    return all_corners, all_ids
 
 def compute_marker_weights(
     corner_dict: dict,

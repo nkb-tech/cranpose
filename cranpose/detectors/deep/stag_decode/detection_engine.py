@@ -452,10 +452,6 @@ class DetectionEngine:
 
             tag_id_decimal = decoded_tag['tag_id']
             rotate_idx = 0
-
-
-
-            
             visualize_rt(image_out_pose, decoded_tag['rvecs'], decoded_tag['tvecs'], self.cameraMatrix, self.distCoeffs, decoded_tag['tag_real_size_in_meter'], tag_id_decimal = tag_id_decimal, tid_text_pos=None, score=None, is_draw_cube =False, rotate_idx=rotate_idx, text_color= None)
 
             image_rect = visual_keypoints(image, decoded_tag, tag_id_decimal)
@@ -472,3 +468,54 @@ class DetectionEngine:
         c = cv2.waitKey(time_to_wait)
 
         return c
+    
+    def partial_process(self, image, detect_scale=None):
+        stag_detector= self.stag_detector
+        stag_decoder = self.stag_decoder
+
+        if detect_scale is None:
+            h, w = image.shape[:2]
+            detect_scale = min(640, min(h, w))/ min(h, w)
+
+        if type(detect_scale) == list:
+            detect_scales = detect_scale
+        else:
+            detect_scales = [detect_scale]
+
+
+        # stage-1
+        self.image = image
+        # print('>>>>>>>Stage-1<<<<<<<')
+        rois_info = stag_detector.detect_rois(image, detect_scales[0] )
+        self.bbox_corner_info = stag_detector.image_res
+
+        # stage-1 print
+        # print('%d ROIs'%len(rois_info))
+
+
+        # stage-2
+        # print('>>>>>>>Stage-2<<<<<<<')
+        rois = [roi_info['ordered_corners'] for roi_info in rois_info]
+        features_pred_list, crops = stag_decoder.partial_detect_tags(image, rois.copy())
+
+        return features_pred_list, rois_info, crops
+
+    def process_stage_1(self, image, detect_scale=None):
+        stag_detector= self.stag_detector
+
+        if detect_scale is None:
+            h, w = image.shape[:2]
+            detect_scale = min(640, min(h, w))/ min(h, w)
+
+        if type(detect_scale) == list:
+            detect_scales = detect_scale
+        else:
+            detect_scales = [detect_scale]
+
+
+        # stage-1
+        self.image = image
+        # print('>>>>>>>Stage-1<<<<<<<')
+        rois_info = stag_detector.detect_rois(image, detect_scales[0])
+
+        return rois_info
