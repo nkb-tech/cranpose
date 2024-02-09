@@ -518,4 +518,10 @@ class DetectionEngine:
         # print('>>>>>>>Stage-1<<<<<<<')
         rois_info = stag_detector.detect_rois(image, detect_scales[0])
 
-        return rois_info
+        result = np.array([np.array(roi_info['ordered_corners'])
+                           for roi_info in rois_info])
+
+        return result
+    
+    def __call__(self, *args, **kwargs):
+        return self.process_stage_1(*args, **kwargs)

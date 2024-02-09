@@ -283,9 +283,9 @@ def detect_markers_opencv(
     aruco_dict_type: str,
     matrix_coefficients: np.ndarray,
     distortion_coefficients: np.ndarray,
-    adaptiveThreshWinSizeMin: int = 3,
+    adaptiveThreshWinSizeMin: int = 13,
     adaptiveThreshWinSizeMax: int = 33,
-    adaptiveThreshWinSizeStep: int = 5,
+    adaptiveThreshWinSizeStep: int = 10,
     adaptiveThreshConstant: int = 1,
     invert_image: bool = False,
 ):
@@ -348,19 +348,19 @@ def detect_markers_combined_v2(
     detector = cv2.aruco.ArucoDetector(dictionary, parameters)
     
     # /// Step 1. Deep detection stage 1 ///
-    rois_info = deep_detector.process_stage_1(image)
+    rois_info = deep_detector(image)
 
     all_corners = []
     all_ids = []
     
     # /// Step 2. Iterate over rois to find valid markers ///
-
+    # print(rois_info)
     for roi_info in rois_info:
         # Crop
         # import ipdb; ipdb.set_trace()
         croped, mask, dst, dst2 = crop_poly_fill_bg(
             image, 
-            np.array(roi_info['ordered_corners']).astype(int),
+            roi_info.astype(int),
             # roi_info['ordered_corners'],
             boundary=15, bgfill=155)
         # Resize
@@ -378,7 +378,7 @@ def detect_markers_combined_v2(
         
         # print(corners, ids)
         if ids is not None:
-            all_corners.append([roi_info['ordered_corners']])
+            all_corners.append([roi_info])
             all_ids.append(ids[0][0])
 
     all_corners = np.array(all_corners)

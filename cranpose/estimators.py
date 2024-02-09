@@ -22,8 +22,9 @@ from .campose import (
     estimate_camera_pose_in_markers,
     estimate_marker_poses_in_camera_extrinsic_guess,
 )
-from .detectors.deep.deeptag_model_setting import load_deeptag_models
 from .detectors.deep.stag_decode.detection_engine import DetectionEngine
+from .detectors.deep.deeptag_model_setting import load_deeptag_models
+from .detectors.yolo.inference import YoloCranpose
 from .utils import (
     aruco_codebook_by_dict_type,
     create_marker_mtcs,
@@ -89,6 +90,7 @@ class PoseSingle:
         right_edge_weight_func: Callable = f_right_x_002,
         camera_movement: CameraMovement = None,
         use_deep_detector_stg2: bool = True,
+        detector_type = 'yolo',
         deep_detector_checkpoint_dir = os.path.join(
             os.path.dirname(__file__),'detectors','deep','models'),
         deep_detector_device = 'cpu',
@@ -145,7 +147,7 @@ class PoseSingle:
             else:
                 self.deep_detector_device = 'cpu'
 
-            self.deep_detector = self._init_deep_detector()
+            self.deep_detector = self._init_deep_detector(detector_type)
 
         else:
             self.deep_detector = None
@@ -177,31 +179,37 @@ class PoseSingle:
                                                         [0, 1, 0, 0],
                                                         [0, 0, 1, 0],
                                                         [0, 0, 0, 1]])
-    def _init_deep_detector(self):
+    def _init_deep_detector(self, detector_type: str = 'yolo'):
 
-        # Turn marker codes from aruco dicitonary into codebook
-        codebook = aruco_codebook_by_dict_type(
-            aruco_dict_type=self.aruco_dict_type)
+        assert detector_type in ('yolo', 'deep')
 
-        # a piece of hardcode
-        checkpoint_dir = self.deep_detector_checkpoint_dir
-        tag_family = "aruco"
-        hamming_dist= 8
+        if detector_type == 'deep':
+            # Turn marker codes from aruco dicitonary into codebook
+            codebook = aruco_codebook_by_dict_type(
+                aruco_dict_type=self.aruco_dict_type)
 
-        model_detector, model_decoder, device, tag_type, grid_size_cand_list = \
-            load_deeptag_models(tag_family, checkpoint_dir=checkpoint_dir,
-                                device=self.deep_detector_device) 
+            # a piece of hardcode
+            checkpoint_dir = self.deep_detector_checkpoint_dir
+            tag_family = "aruco"
+            hamming_dist= 8
 
-        deep_detector = DetectionEngine(
-            model_detector, model_decoder, device, tag_type, grid_size_cand_list,
-            stg2_iter_num= 2, # 1 or 2
-            min_center_score=0.2, min_corner_score = 0.2, # 0.1 or 0.2 or 0.3
-            batch_size_stg2 = 4, # 1 or 2 or 4
-            hamming_dist= hamming_dist, # 0, 2, 4
-            cameraMatrix = self.matrix_coefficients,
-            distCoeffs= self.distortion_coefficients,
-            codebook = codebook,
-            tag_real_size_in_meter_dict = {-1:self.marker_edge_len})
+            model_detector, model_decoder, device, tag_type, grid_size_cand_list = \
+                load_deeptag_models(tag_family, checkpoint_dir=checkpoint_dir,
+                                    device=self.deep_detector_device) 
+
+            deep_detector = DetectionEngine(
+                model_detector, model_decoder, device, tag_type, grid_size_cand_list,
+                stg2_iter_num= 2, # 1 or 2
+                min_center_score=0.2, min_corner_score = 0.2, # 0.1 or 0.2 or 0.3
+                batch_size_stg2 = 4, # 1 or 2 or 4
+                hamming_dist= hamming_dist, # 0, 2, 4
+                cameraMatrix = self.matrix_coefficients,
+                distCoeffs= self.distortion_coefficients,
+                codebook = codebook,
+                tag_real_size_in_meter_dict = {-1:self.marker_edge_len})
+
+        elif detector_type == 'yolo':
+            deep_detector = YoloCranpose()
 
         return deep_detector
 
@@ -254,6 +262,12 @@ class PoseSingle:
 
     def _detect_markers(self, image: np.ndarray
                        ) -> Tuple[np.array, np.array, np.array, dict]:
+        """
+        Комбинированная детекция в два шага
+        1. Классиеческий детектор
+        2. Если ничего не обнаружено на шаге 1: 
+        полноценный нейростевой детектор (только двустадийный дип детектор)
+        """
 
         # /// Attempt to detect them with the classical method ///
         corners, ids, rejected_img_points = detect_markers_opencv(
@@ -299,12 +313,17 @@ class PoseSingle:
         
         # print(corners, ids)
 
-
         return corners, ids, mask, corners_dict
     
     def _detect_markers_v2(self, image: np.ndarray
                            ) -> Tuple[np.array, np.array, np.array, dict]:
-
+        """
+        Комбинированная детекция в два шага
+        1. Классиеческий детектор
+        2. Если ничего не обнаружено на шаге 1: 
+        нейросетевой детектор углов + классический детектор для декодинга
+        (работает и ёло и дип)
+        """
         # /// Step1. Attempt to detect them with the classical method ///
         corners, ids, rejected_img_points = detect_markers_opencv(
             frame=image,
@@ -331,6 +350,40 @@ class PoseSingle:
 
         # /// Step 2. Optional detection with deep detector ///
         # If NO markers have been detected with classical method,
+        # from the whole picture, lets take advantage of a deep detector
+        # and help it
+        if corners_dict == {}:
+            corners, ids = detect_markers_combined_v2(
+                image=image,
+                aruco_dict_type=self.aruco_dict_type,
+                deep_detector=self.deep_detector,
+                transform_imgage_in_second_classic_detector = \
+                    self.transform_imgage_in_second_classic_detector)
+
+            # Do some postprocessing based on the result
+            if ids is not None:
+
+                mask = np.array([
+                        id in self.all_marker_poses.keys() for id in ids
+                    ])
+                ids = ids[mask]
+                corners = np.array(corners)[mask]
+                corners_dict = dict(zip(ids, corners))
+            else:
+                mask = None
+                corners_dict = {}
+        return corners, ids, mask, corners_dict
+    
+    def _detect_markers_v3(self, image: np.ndarray
+                          ) -> Tuple[np.array, np.array, np.array, dict]:
+        """
+        Детекция только нейросетевым детектор углов +
+        классический детектор для декодинга
+        (работает и ёло и дип)
+        """
+        mask = None
+        corners_dict = {}
+        # /// Step 1. Detection with deep detector ///
         # from the whole picture, lets take advantage of a deep detector
         # and help it
         if corners_dict == {}:
