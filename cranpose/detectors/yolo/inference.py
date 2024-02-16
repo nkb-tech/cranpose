@@ -7,11 +7,29 @@ model = YOLO(os.path.join(os.path.dirname(__file__), 'models/baseline_nano.pt'))
 
 class YoloCranpose:
     def __init__(self,
-                 model = model):
+                 model = model,
+                 device = 'cpu'):
         self.model = model
+        self.device = device
+        for _ in range(100):
+            dummy_img = np.random.randint(
+                    low=0,
+                    high=255,
+                    size=(720, 1280, 3),
+                    dtype=np.uint8,
+                )
+            self.model(
+                source=dummy_img,
+                device=self.device,
+                half=True,
+                verbose=False
+            )
 
     def predict_keypoints(self, image):
-        results = self.model(image, save=False, augment=False, verbose=False)
+        results = self.model(image, 
+                             device=self.device, 
+                             verbose=False,
+                             half=True)
 
         corners = []
         for result in results:

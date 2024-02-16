@@ -168,7 +168,8 @@ class PoseSingle:
         if apply_kf:
             warnings.warn("""Using KF in PoseSingle object is deprecated
               and will be completely removed in the future.""")
-            self.camera_in_base.mask = True
+            self.camera_in_base.mask = False
+            # self.camera_in_base.mask = True
             self.kf = self._init_kf()
         else:
             self.camera_in_base.mask = False
@@ -179,6 +180,7 @@ class PoseSingle:
                                                         [0, 1, 0, 0],
                                                         [0, 0, 1, 0],
                                                         [0, 0, 0, 1]])
+
     def _init_deep_detector(self, detector_type: str = 'yolo'):
 
         assert detector_type in ('yolo', 'deep')
@@ -209,7 +211,7 @@ class PoseSingle:
                 tag_real_size_in_meter_dict = {-1:self.marker_edge_len})
 
         elif detector_type == 'yolo':
-            deep_detector = YoloCranpose()
+            deep_detector = YoloCranpose(device=self.deep_detector_device)
 
         return deep_detector
 
@@ -479,7 +481,8 @@ class PoseSingle:
                 # Maybe it is reasonable to mask the estimation
                 # only if we're using a kf
                 if self.apply_kf:
-                    camera_in_base_result.mask = True
+                    # camera_in_base_result.mask = True
+                    camera_in_base_result.mask = False
 
             else:  # if marker is detected
                 self.is_detection = True
@@ -686,13 +689,14 @@ class PoseMultiple:
     2. If some estimators detected markers but others didn't ->
         take a mean of predictions of those which have detected markers
     3. If no estimators detected markers ->
-        3.1 No estimators have any predictions
+        3.1 No estimators had any predictions in the past
         (no detection occured in the past) ->
             return a no prediction result ("---")
-        3.2 Some estimators have predictions, others don't ->
-            take a mean of existing predictions
-        3.3 All estimators have predictions ->
-            take a mean of predictions
+        3.2 Some estimators had predictions in the past, others didn't ->
+            take a mean of those who had
+        3.3 All estimators had predictionsin the past  ->
+            NOT !!! take a mean of predictions
+            BUT !!! take last valid prediction from estimator with most recent detection
 
     This class is capable of applying Kalman Filter (KF) to the estimation
     It is STRONGLY RECOMMENDED TO APPLY KF HERE, INSTEAD OF PoseSingle objects
@@ -713,6 +717,8 @@ class PoseMultiple:
         self.estimators = estimators
         self.apply_kf = apply_kf
 
+        # initial pose matrix
+        self.state_mean = np.ma.array(np.eye(4))
         # Kalman-Filter initialization
         self.filtered_state_mean = None
         self.filtered_state_covariance = None
@@ -726,7 +732,7 @@ class PoseMultiple:
 
     def _init_kf(self, kf_transition_covariance, kf_observation_covariance):
         # time step
-        dt = 1 / 25
+        dt = 1 / 2
 
         # transition_matrix
         F = [[1, dt, 0.5 * dt * dt], [0, 1, dt], [0, 0, 1]]
@@ -833,12 +839,13 @@ class PoseMultiple:
         is_detection = np.array(is_detection)
         # 1 and 2
         if any(is_detection):
-            # Case when detections are available
+            # Case when estimators detected somtething
             preds = np.array(preds)[is_detection]
             mean_pred = np.ma.array(np.mean(preds, axis=0))
             # This tells filter to make an ESTIMATION:
             mean_pred.mask = False
                 
+        # 3
         else:
             # check which estimators have already made a detection
             initialized_estimators = np.array([
@@ -846,15 +853,19 @@ class PoseMultiple:
             # if an estimator returnes an identity matrix, it means
             # it is not initialized
             if any(initialized_estimators): #  3.2 and 3.3
-                # print("3.2,3.3")
+                
+                # TODO remove this old solution (2 lines below)
+                # preds = np.array(preds)[initialized_estimators]
+                # mean_pred = np.ma.array(np.mean(preds, axis=0))
+                mean_pred = self.state_mean
 
-                preds = np.array(preds)[initialized_estimators]
-                mean_pred = np.ma.array(np.mean(preds, axis=0))
             else:
                 mean_pred = np.ma.array(np.eye(4))
             # This tells filter to make a PREDICTION:
-            mean_pred.mask = True
-
+            mean_pred.mask = False
+            # mean_pred.mask = True
+        if debug:
+            debug_mean_pred = mean_pred
         if self.apply_kf:
             # If ANY cameras says is moving -> apply Kalman Filter as usual
             if any(is_moving):
@@ -875,6 +886,7 @@ class PoseMultiple:
                 debug_mean_pred = mean_pred
             
             mean_pred = filtered_mean_pred
+        self.state_mean = mean_pred
 
         # if preds != []:
         #     # if we have AT LEAST one detection, we use only preds with detections
@@ -944,7 +956,8 @@ class PoseSpecial:
         self.filtered_state_mean = None
         self.filtered_state_covariance = None
         if apply_kf:
-            self.mtx.mask = True
+            self.mtx.mask = False
+            # self.mtx.mask = True
             self.kf = self.init_kf()
         else:
             self.mtx.mask = False
@@ -1073,7 +1086,8 @@ class PoseSpecial:
             # Maybe it is reasonable to mask the estimation only if
             # we're using a Kalman filter
             if self.apply_kf:
-                mtx_result.mask = True
+                mtx_result.mask = False
+                # mtx_result.mask = True
 
         else:  # if marker is detected
             # we update the result estimation
