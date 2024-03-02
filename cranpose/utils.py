@@ -321,11 +321,31 @@ def draw_markers_on_frame(
     if type(corners) != tuple:
         corners = corners.astype(np.float32) 
     # Draw a square around the markers
+    # import ipdb; ipdb.set_trace()
     cv2.aruco.drawDetectedMarkers(frame, corners)
 
     # Draw Axis
     cv2.drawFrameAxes(frame, matrix_coefficients, distortion_coefficients,
                       rvec, tvec, edge_len)
+    
+def draw_markers_on_frame_by_points(
+    frame,
+    corners,
+    matrix_coefficients,
+    distortion_coefficients,
+    edge_len,
+):
+    rvecs, tvecs, _ = custom_estimatePoseSingleMarkers_use_extrinsic_guess(
+        edge_len, [corners], matrix_coefficients, distortion_coefficients,
+    )
+    if type(corners) != tuple:
+        corners = corners.astype(np.float32) 
+    # Draw a square around the markers
+    cv2.aruco.drawDetectedMarkers(frame, corners)
+
+    # Draw Axis
+    cv2.drawFrameAxes(frame, matrix_coefficients, distortion_coefficients,
+                      rvecs[0], tvecs[0], edge_len)
 
 
 def draw_weights_on_frame(frame, corners, weights):

@@ -46,9 +46,7 @@ class DetectorPredictor:
         if type(images) is not list:
             images = [images]
 
-
         images = [crop_or_pad(image_in, scale, stride = max(self.stride_list)) for image_in in images]
-
 
         if self.priors is None or self.priors['image_size'][0]!= images[0].shape[0] or self.priors['image_size'][1] != images[0].shape[1]:
             self.priors = self.get_grid_and_ssd_priors(images[0].shape[:2])
@@ -177,9 +175,6 @@ def pred_detector_features(model, image_torch, priors, w, h, scale, center_varia
 
 
 def pred_decoder_features(model, imgs_torch_2stg, corner_priors, grid_priors, tw, th, center_variance):
-    # print("decoder")
-    # print(imgs_torch_2stg.device)
-    # print(next(model.parameters()).is_cuda)
     stages_output_2stg = model(imgs_torch_2stg)    
         
 

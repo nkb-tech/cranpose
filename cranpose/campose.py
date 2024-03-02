@@ -390,6 +390,7 @@ def detect_markers_combined_v2(
 
     return all_corners, all_ids
 
+
 def compute_marker_weights(
     corner_dict: dict,
     height: float,

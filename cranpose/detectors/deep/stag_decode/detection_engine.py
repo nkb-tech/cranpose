@@ -502,6 +502,7 @@ class DetectionEngine:
 
     def process_stage_1(self, image, detect_scale=None):
         stag_detector= self.stag_detector
+        import ipdb; ipdb.set_trace()
 
         if detect_scale is None:
             h, w = image.shape[:2]
@@ -522,6 +523,29 @@ class DetectionEngine:
                            for roi_info in rois_info])
 
         return result
+    
+    def process_stage_1_batch(self, images, detect_scale=None):
+        stag_detector= self.stag_detector
+
+        if detect_scale is None:
+            h, w = images[0].shape[:2]
+            detect_scale = min(640, min(h, w))/ min(h, w)
+
+        if type(detect_scale) == list:
+            detect_scales = detect_scale
+        else:
+            detect_scales = [detect_scale]
+
+        # stage-1
+        rois_infos = stag_detector.detect_rois_batch(images, detect_scales[0])
+
+        results = []
+        for rois_info in rois_infos:
+            result = np.array([np.array(roi_info['ordered_corners'])
+                            for roi_info in rois_info])
+            results.append(result)
+
+        return results
     
     def __call__(self, *args, **kwargs):
         return self.process_stage_1(*args, **kwargs)

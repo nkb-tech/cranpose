@@ -42,6 +42,27 @@ class YoloCranpose:
                     corners.append(kpts)
         
         return corners
+
+    def predict_keypoints_batch(self, images):
+        results = self.model(images, 
+                             device=self.device, 
+                             verbose=False,
+                             half=True)
+
+        corners_per_batch = []
+        for result in results:
+            kpts_per_image = np.array(result.keypoints.data.cpu())
+            corners_per_image = []
+
+            for kpts in kpts_per_image:
+                # print(kpts.shape)
+                # print(kpts)
+                if result.boxes.cls.shape != torch.Size([0]):
+                # if kpts != np.array([]):
+                    corners_per_image.append(kpts)
+            corners_per_batch.append(corners_per_image)
+        
+        return corners_per_batch
     
     def __call__(self, *args, **kwargs):
         return self.predict_keypoints(*args, **kwargs)
