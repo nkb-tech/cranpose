@@ -256,7 +256,6 @@ def estimate_marker_poses_in_camera_extrinsic_guess(
     # If markers are detected
     if len(corners) > 0:
         for i, id in enumerate(ids):
-
             rvec, tvec, marker_points = \
                 custom_estimatePoseSingleMarkers_use_extrinsic_guess(
                     corners[i],
@@ -268,8 +267,8 @@ def estimate_marker_poses_in_camera_extrinsic_guess(
                     init_tvecs.get(id, None),
                 )
 
-            r = R.from_rotvec(rvec[0][0])
-            mtx = np.vstack([np.column_stack([r.as_matrix(), tvec[0][0]]), [0, 0, 0, 1]])
+            r = R.from_rotvec(rvec[0])
+            mtx = np.vstack([np.column_stack([r.as_matrix(), tvec[0]]), [0, 0, 0, 1]])
 
             mtcs[id] = mtx
             rvecs[id] = rvec
@@ -410,6 +409,7 @@ def compute_marker_weights(
         weight_func_right_edge - function to weight marker location relative to rightmost edge)
 
     """
+    # import ipdb; ipdb.set_trace()
     corners = corner_dict.values()
     ids = corner_dict.keys()
     f_area = weight_func_area

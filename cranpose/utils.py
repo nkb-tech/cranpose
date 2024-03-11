@@ -6,9 +6,12 @@ import pickle as pk
 import sys
 
 import cv2
+import copy
 import numpy as np
 
 from scipy import sparse
+from scipy.spatial.transform import Rotation as R
+
 from typing import Tuple
 
 f_left_x_002 = lambda x: np.tanh(10*(x-0.02)).clip(min=0)
@@ -335,17 +338,23 @@ def draw_markers_on_frame_by_points(
     distortion_coefficients,
     edge_len,
 ):
-    rvecs, tvecs, _ = custom_estimatePoseSingleMarkers_use_extrinsic_guess(
-        edge_len, [corners], matrix_coefficients, distortion_coefficients,
-    )
+    frame = copy.deepcopy(frame)
+
     if type(corners) != tuple:
         corners = corners.astype(np.float32) 
     # Draw a square around the markers
-    cv2.aruco.drawDetectedMarkers(frame, corners)
+    cv2.aruco.drawDetectedMarkers(frame, np.asarray(corners))
 
-    # Draw Axis
-    cv2.drawFrameAxes(frame, matrix_coefficients, distortion_coefficients,
-                      rvecs[0], tvecs[0], edge_len)
+    _, rvecs, tvecs  = estimate_markers_poses_in_camera(
+        corners, edge_len, matrix_coefficients, distortion_coefficients,
+    )
+
+    
+    for rvec, tvec in zip(rvecs, tvecs):
+        # Draw Axis
+        cv2.drawFrameAxes(frame, matrix_coefficients, distortion_coefficients,
+                        rvec, tvec, edge_len)
+    return frame
 
 
 def draw_weights_on_frame(frame, corners, weights):
@@ -379,7 +388,12 @@ def custom_estimatePoseSingleMarkers_use_extrinsic_guess(
     mtx - is the camera matrix
     distortion - is the camera distortion matrix
     RETURN list of rvecs, tvecs, and trash (so that it corresponds to the old estimatePoseSingleMarkers())
+
+    IMPORTANT: check dimensions of corners. It must be (N, 1, 4, 2), where N is the number of 
+    corners in the image. As sson as the detector returns them in shape of (N, 4, 2), we add one more
+    dimension inside this function.
     '''
+
     marker_points = np.array([[-marker_size / 2, marker_size / 2, 0],
                               [marker_size / 2, marker_size / 2, 0],
                               [marker_size / 2, -marker_size / 2, 0],
@@ -392,10 +406,10 @@ def custom_estimatePoseSingleMarkers_use_extrinsic_guess(
     if (rvec is None) or (tvec is None):
         use_extrinsic_guess = False
 
-    for c in corners:
+    for i, c in enumerate(corners):
         nada, R, t = cv2.solvePnP(
             marker_points,
-            corners[i],
+            corners,
             mtx,
             distortion,
             rvec=rvec,
@@ -403,9 +417,8 @@ def custom_estimatePoseSingleMarkers_use_extrinsic_guess(
             useExtrinsicGuess=use_extrinsic_guess,
             flags=cv2.SOLVEPNP_IPPE_SQUARE,
             )
-        # print(R)
-        rvecs.append(R.reshape(1, -1))
-        tvecs.append(t.reshape(1, -1))
+        rvecs.append(R.reshape(1, -1)[0])
+        tvecs.append(t.reshape(1, -1)[0])
         nadas.append(nada)
 
     rvecs = np.asarray(rvecs)
@@ -603,3 +616,91 @@ def draw_img_grid(imgs, sep=2):
             grid[i*h:(i+1)*h-sep,
                  j*w:(j+1)*w-sep] = imgs[i, j, :-sep, :-sep]
     return grid
+
+
+# /// Refactored functions from version 0.2 ///
+
+def estimate_markers_poses_in_camera(
+        corners: np.ndarray,
+        edge_len: float,
+        matrix_coefficients: np.ndarray,
+        distortion_coefficients: np.ndarray,
+        use_extrinsic_guess=False,
+        init_rvecs={},
+        init_tvecs={},
+    ):
+    """
+    Estimates poses of markers in camera.
+    """
+
+    mtcs = []
+    rvecs = []
+    tvecs = []
+
+    # If markers are detected
+    if len(corners) > 0:
+        for i, _ in enumerate(corners):
+            rvec, tvec, marker_points = \
+                estimate_pose_single_marker(
+                    corners[i],
+                    edge_len,
+                    matrix_coefficients,
+                    distortion_coefficients,
+                    use_extrinsic_guess,
+                    init_rvecs.get(id, None),
+                    init_tvecs.get(id, None),
+                )
+
+            r = R.from_rotvec(rvec)
+            mtx = np.vstack([np.column_stack([r.as_matrix(), tvec]), [0, 0, 0, 1]])
+
+            mtcs.append(mtx)
+            rvecs.append(rvec)
+            tvecs.append(tvec)
+
+    return mtcs, rvecs, tvecs 
+
+
+def estimate_pose_single_marker(
+        corners,
+        marker_size,
+        mtx,
+        distortion,
+        use_extrinsic_guess=False,
+        rvec=None,
+        tvec=None,
+):
+    '''
+    This will estimate the rvec and tvec for each of the marker corners detected by:
+       corners, ids, rejectedImgPoints = detector.detectMarkers(image)
+    corners - is an array of detected corners for each detected marker in the image
+    marker_size - is the size of the detected markers
+    mtx - is the camera matrix
+    distortion - is the camera distortion matrix
+    RETURN list of rvecs, tvecs, and trash (so that it corresponds to the old estimatePoseSingleMarkers())
+    '''
+    marker_points = np.array([[-marker_size / 2, marker_size / 2, 0],
+                              [marker_size / 2, marker_size / 2, 0],
+                              [marker_size / 2, -marker_size / 2, 0],
+                              [-marker_size / 2, -marker_size / 2, 0]], dtype=np.float32)
+    nadas = []
+    rvecs = []
+    tvecs = []
+
+    if (rvec is None) or (tvec is None):
+        use_extrinsic_guess = False
+
+    nada, R, t = cv2.solvePnP(
+        marker_points,
+        corners,
+        mtx,
+        distortion,
+        rvec=rvec,
+        tvec=tvec,
+        useExtrinsicGuess=use_extrinsic_guess,
+        flags=cv2.SOLVEPNP_IPPE_SQUARE,
+        )
+    rvec = R.reshape(1, -1)[0]
+    tvec = t.reshape(1, -1)[0]
+
+    return rvec, tvec, nadas

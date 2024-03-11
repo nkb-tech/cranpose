@@ -11,7 +11,8 @@ from ultralytics import YOLO
 from ..campose import detect_markers_combined_v2, detect_markers_opencv
 from ..utils import aruco_codebook_by_dict_type
 from .utils import (detect_nn_corners_decode_classic_id, 
-                    detect_nn_corners_decode_nn_id)
+                    detect_nn_corners_decode_nn_id,
+                    decode_ids_classic)
 from .deep.deeptag_model_setting import load_deeptag_models
 from .deep.stag_decode.detection_engine import DetectionEngine
 from .yolo.inference import YoloCranpose
@@ -35,10 +36,13 @@ def detect_opencv(detector, frame, invert_image = False):
         ids = ids.reshape(1, -1)[0]
     return corners, ids, rejected_img_points
 
-def filter_detections(detected_ids, all_ids, corners):
-    # Do some postprocessing based on the result
+def filter_ids(detected_ids, all_ids, corners):
+    """
+    This function removes predicitons, which ids are not in all_ids list.
+    It is applied to detecitons of a single image (not a batch).
+    """
     if detected_ids is not None:
-        mask = np.array([id in all_ids for id in detected_ids])
+        mask = np.array([id in all_ids for id in detected_ids]).astype(bool)
         detected_ids = detected_ids[mask]
         corners = np.array(corners)[mask]
         corners_dict = dict(zip(detected_ids, corners))
@@ -238,13 +242,28 @@ class ArUCoDetector:
             Image for detection
 
         """
+
+        # new
+        # Here we create a list of results for each image.
+        # This list will contain another list which elements will correspond
+        # to an individual marker in the image. In a majority of cases,
+        # each image will have one marker detected, but sometimes, 
+        # especially with a neural network, there can be more of them.
+        detection_results = [[] for _ in range(len(images))]
+        
+        # new
+        corners_batch = [None for _ in range(len(images))]
+        ids_batch = [None for _ in range(len(images))]
+
         corners_dicts_batch = np.array([{} for _ in range(len(images))]) 
         masks_batch = np.array([None for _ in range(len(images))]) 
         is_detection_batch = np.full(len(images), 0).astype(bool)
 
 
         if self.is_opencv_step_1:
-            # /// Attempt to detect them with the classical method ///
+            # /// Attempt to detect markers with the classical method ///
+            # (the classical method yields only
+            # coupled result: conrners with ids)
             for n, image in enumerate(images):
                 corners_dict = {} 
                 mask = None
@@ -252,45 +271,77 @@ class ArUCoDetector:
                     detector=self.opencv_detector,
                     frame=image)
                 
-                mask, corners_dict = filter_detections(ids, self.aruco_ids_list, corners)
+                mask, corners_dict = filter_ids(ids, self.aruco_ids_list, corners)
                 corners_dicts_batch[n] = corners_dict
                 masks_batch[n] = mask
                 is_detection_batch[n] = not corners_dict == {}
 
+                corners_batch[n] = corners
+                ids_batch[n] = ids
+
         if self.is_nn_step_2:
             # /// Optional detection with deep detector ///
-            # (only if nothing is detected with the function above,
-            # or if opencv detection is off)
+            # (This takes only images, in which the above pipeline
+            # did not detect anything, or if opencv detection is off)
             # import ipdb; ipdb.set_trace()
 
             if np.sum(~is_detection_batch) > 0:
                 images_to_nn = list(compress(images, ~is_detection_batch))
-                # import ipdb; ipdb.set_trace()
                 if self.is_nn_step_2_deep_id:
-                    corners_batch, ids_batch = detect_nn_corners_decode_nn_id(
+                    nn_corners_batch, nn_ids_batch = detect_nn_corners_decode_nn_id(
                         images = images_to_nn,
                         detector=self.nn_detector)
-
                 else:
+                    # corners_batch, ids_batch = detect_nn_corners_decode_classic_id(
+                    #         images = images_to_nn,
+                    #         detector=self.nn_detector,
+                    #         decoder=self.opencv_decoder)
 
-                    corners_batch, ids_batch = detect_nn_corners_decode_classic_id(
-                            images = images_to_nn,
-                            # images=images[~is_detection_batch],
-                            detector=self.nn_detector,
-                            decoder=self.opencv_decoder)
-
+                    nn_corners_batch = self.nn_detector(images_to_nn)
+                    nn_ids_batch = decode_ids_classic(
+                        images_to_nn,
+                        nn_corners_batch,
+                        self.opencv_decoder)
+                # import ipdb; ipdb.set_trace()
+                
                 nn_corners_dicts_batch = np.array([{} for _ in range(len(images_to_nn))])
                 nn_masks_batch = np.array([None for _ in range(len(images_to_nn))])
-                for n, (corners, ids) in enumerate(zip(corners_batch, ids_batch)):
+                for n, (corners, ids) in enumerate(zip(nn_corners_batch, nn_ids_batch)):
                     # import ipdb; ipdb.set_trace()
-                    nn_mask, nn_corners_dict = filter_detections(ids, self.aruco_ids_list, corners)
+                    nn_mask, nn_corners_dict = filter_ids(ids, self.aruco_ids_list, corners)
                     nn_corners_dicts_batch[n] = nn_corners_dict
                     nn_masks_batch[n] = nn_mask
                 
                 corners_dicts_batch[~is_detection_batch] = nn_corners_dicts_batch
                 masks_batch[~is_detection_batch] = nn_masks_batch
+
+                # corners_batch[~is_detection_batch] = nn_corners_batch
+                # ids_batch[~is_detection_batch] = nn_ids_batch
+
+                # TODO check if squeeze() is required
+                nn_counter = 0
+                for classic_counter, is_nn_image in enumerate(~is_detection_batch):
+                    if is_nn_image:
+                        corners_batch[classic_counter] = nn_corners_batch[nn_counter]
+                        ids_batch[classic_counter] = nn_ids_batch[nn_counter]
+
+                        nn_counter+=1
+                    # np.putmask(corners_batch, ~is_detection_batch, np.array(nn_corners_batch))
+                    # np.putmask(ids_batch, ~is_detection_batch, np.array(nn_ids_batch))
             
-        return corners_dicts_batch, masks_batch
+        return corners_dicts_batch, masks_batch, corners_batch, ids_batch
     
     def __call__(self, *args, **kwargs):
         return self._detect_markers(*args, **kwargs)
+
+
+class IdDecoder:
+    def __init__(
+        self):
+        pass
+    
+    def decode_id(self, image):
+
+        # /// Step 1. Apply transformation to the image ///
+
+        pass 

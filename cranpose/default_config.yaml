@@ -1,6 +1,6 @@
 # Путь относительно точки входа
 deep_detector_checkpoints_dir: 'cranpose/detectors/deep/models'
-yolo_detector_checkpoint_path: '/home/slava/cranpose/data/hdd/models/nlmk_aruco/v8n-p_960_dsv1/weights/best.pt'
+yolo_detector_checkpoint_path: '/home/slava/cranpose/data/hdd/models/nlmk_aruco/v8n-p_960_dsv1/weights/last.pt'
 
 opencv_detector_adaptive_thresh_win_size_min: 13
 opencv_detector_adaptive_thresh_win_size_max: 33

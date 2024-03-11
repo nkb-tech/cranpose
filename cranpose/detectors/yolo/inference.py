@@ -59,7 +59,7 @@ class YoloCranpose:
                 # print(kpts)
                 if result.boxes.cls.shape != torch.Size([0]):
                 # if kpts != np.array([]):
-                    corners_per_image.append(kpts)
+                    corners_per_image.append(np.expand_dims(kpts, 0))
             corners_per_batch.append(corners_per_image)
         
         return corners_per_batch

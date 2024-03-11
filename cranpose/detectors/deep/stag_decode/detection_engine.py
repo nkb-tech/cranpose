@@ -502,7 +502,7 @@ class DetectionEngine:
 
     def process_stage_1(self, image, detect_scale=None):
         stag_detector= self.stag_detector
-        import ipdb; ipdb.set_trace()
+        # import ipdb; ipdb.set_trace()
 
         if detect_scale is None:
             h, w = image.shape[:2]
@@ -541,7 +541,7 @@ class DetectionEngine:
 
         results = []
         for rois_info in rois_infos:
-            result = np.array([np.array(roi_info['ordered_corners'])
+            result = np.array([np.expand_dims(np.array(roi_info['ordered_corners']), 0)
                             for roi_info in rois_info])
             results.append(result)
 

@@ -44,29 +44,39 @@ with open(config_filename, encoding='utf8') as f:
 
 class PoseSingle:
     """
-    aruco_dict_type: str - тип Аруко маркеров (напр. DICT_4X4_50)
-    camera_orientation: int, - ориентация камеры -1 rear, 1 front
-    n_markers: int - максимальное число маркеров,
-    marker_step: float - шаг между маркерами (м),
-    marker_edge_len: float - длина стороны маркера (м),
-    matrix_coefficients: np.ndarray - калибровка камеры intrinsic,
-    distortion_coefficients: np.ndarray - коэффициенты дисторсии,
-    apply_kf: bool = True - применять ли фильтр Калмана,
-    transition_coef: float = 1 - коэффициент Калман фильтра transition_coef,
+    Arguments
+    ---------
+    aruco_dict_type : str
+        Тип Аруко маркеров (напр. DICT_4X4_50).
+    camera_orientation : int
+        Ориентация камеры -1 rear, 1 front.
+    n_markers : int
+        Максимальное число маркеров.
+    marker_step : float
+        Шаг между маркерами (м).
+    marker_edge_len : float
+        Длина стороны маркера (м).
+    matrix_coefficients : np.ndarray
+        Калибровка камеры intrinsic.
+    distortion_coefficients : np.ndarray
+        Коэффициенты дисторсии.
+    apply_kf : bool = False - применять ли фильтр Калмана,
+    transition_coef : float = 1 - коэффициент Калман фильтра transition_coef,
       чем больше, тем быстрее фильтр,
-    observation_coef: float = 1 - коэффициент Калман фильтра observation_coef,
+    observation_coef : float = 1 - коэффициент Калман фильтра observation_coef,
       чем больше, тем медленнее фильтр,
-    size_weight_func: Callable - функция для взвешивания маркеров по их
+    size_weight_func : Callable - функция для взвешивания маркеров по их
       размеру (принимает float от 0 до 1)
-    left_edge_weight_func: Callable - функция для взвешивания маркеров по
+    left_edge_weight_func : Callable - функция для взвешивания маркеров по
         положению относительно левого края кадра
         (принимает float от 0 до 1)
-    right_edge_weight_func: Callable - функция для взвешивания маркеров по
+    right_edge_weight_func : Callable - функция для взвешивания маркеров по
         положению относительно правого края кадра
         (принимает float от 0 до 1)
-    x_bias: float = 0 - сдвиг камеры по X относительно начала координат крана,
-    invert_image: bool = False - инвертировать ли картинку
-    debug: bool = False, влючение дебаг режима. в нем, эстимейтор будет
+    x_bias : float = 0
+        Сдвиг камеры по X относительно начала координат крана.
+    invert_image : bool = False - инвертировать ли картинку
+    debug : bool = False, влючение дебаг режима. в нем, эстимейтор будет
         возвращать и предсказание с калман фильтром
         и без него. Помимо этого, объект PoseMultiple, который инициализован
         хобя бы с одним объектом PoseSingle, у которого debug=True, будет
@@ -83,7 +93,7 @@ class PoseSingle:
         marker_edge_len: float,
         matrix_coefficients: np.ndarray,
         distortion_coefficients: np.ndarray,
-        apply_kf: bool = True,
+        apply_kf: bool = False,
         transition_coef: float = 1,
         observation_coef: float = 1,
         x_bias: float = 0,
@@ -91,7 +101,7 @@ class PoseSingle:
         left_edge_weight_func: Callable = f_left_x_002,
         right_edge_weight_func: Callable = f_right_x_002,
         camera_movement: CameraMovement = None,
-        use_deep_detector_stg2: bool = True,
+        use_deep_detector_stg2: bool = False,
         detector_type = 'yolo',
         deep_detector_checkpoint_dir = os.path.join(
             os.path.dirname(__file__),'detectors','deep','models'),
@@ -881,9 +891,22 @@ class PoseMultiple:
                   DEFAULTS['KF']['observation_covariance'],
                  ) -> None:
         """
-        Arguments:
-            estimators: list - objects of PoseSingle
-        Return: None
+        Arguments
+        ---------
+        estimators : list
+            Objects of PoseSingle
+        apply_kf : bool = True
+            Apply Kalman filter to the estimation or not.
+        kf_transition_covariance : np.ndarray
+            Translation covariance of the Kalman filter.
+            Default value is taken from the .yaml file. 
+        kf_observation_covariance : np.ndarray
+            Observation covariance of the Kalman filter.
+            Default value is taken from the .yaml file.
+
+        Returns
+        -------
+        None
         """
         self.estimators = estimators
         self.apply_kf = apply_kf
@@ -1502,6 +1525,7 @@ class CranePoseEstimatior:
         self.detector = detector
         self.estimators = estimators
         self.debug = debug
+        self.detections = None
 
     def detect_markers(self, images: dict):
         """
@@ -1538,10 +1562,15 @@ class CranePoseEstimatior:
                  return_detections = False):
         
         # /// Detect marker corners and ids ///
-        corners_dicts_batch, masks_batch = self.detector(self._get_batch(images))
-        detections = self._get_dict(corners_dicts_batch, images)
+        self.detections = self.detector(
+            self._get_batch(images))
+
+        corners_dicts_batch, masks_batch, all_corners_batch, all_ids_batch = self.detections
+        detections_with_ids = self._get_dict(corners_dicts_batch, images)
 
         # /// Estimate cordinates ///
+        # (this piece of code estimates coordinates by those markers, which ids
+        # were detected)
         estimates = {}
         for crane_id in self.estimators.keys():
             # if self.debug:
@@ -1550,12 +1579,21 @@ class CranePoseEstimatior:
             # else:
             #     mean_pred = self.estimators[crane_id](detections[crane_id], images[crane_id])
 
-            estimates[crane_id] = self.estimators[crane_id](detections[crane_id], images[crane_id], mask)
+            estimates[crane_id] = self.estimators[crane_id](
+                detections_with_ids[crane_id], images[crane_id], mask)
+
             
         if return_detections:
-            return estimates, detections
+            result = {
+                'estimates': estimates,
+                'detections_with_ids': detections_with_ids, 
+                'corners': all_corners_batch, 
+                'ids': all_ids_batch}
         else:
-            return estimates
+            result = {
+                'estimates': estimates}
+
+        return result
         
 
 
