@@ -235,17 +235,13 @@ def estimate_marker_poses_in_camera_extrinsic_guess(
         init_tvecs={},
 ):
     """
-    Function detects aruco markers from dict "aruco_dict_type"
-    and estimates their poses in camera coordinate system
+    Function estimates marker poses in camera coordinate system
 
     args:
-    frame - Frame from the video stream
     matrix_coefficients - Intrinsic matrix of the calibrated camera
     distortion_coefficients - Distortion coefficients associated with your camera
 
     return:
-    frame - The frame with the axis drawn on it
-    ids - list of markers' ids
     mtcs - list of matrices (marker coordinate systems in camera coordinate system)
     """
 

@@ -5,6 +5,7 @@ import os
 import warnings
 from copy import deepcopy
 from typing import Callable, Tuple, Union
+from collections import deque
 
 import numpy as np
 import torch
@@ -23,7 +24,7 @@ from .campose import (
     estimate_marker_poses_in_camera_extrinsic_guess,
 )
 
-from .detectors.detector import ArUCoDetector
+from .detectors.detector import ArUCoDetector, IdDecodeRefiner
 from .detectors.deep.stag_decode.detection_engine import DetectionEngine
 from .detectors.deep.deeptag_model_setting import load_deeptag_models
 from .detectors.yolo.inference import YoloCranpose
@@ -35,6 +36,7 @@ from .utils import (
     f_area,
     f_left_x_002,
     f_right_x_002,
+    flatten_list,
 )
 
 config_filename = os.path.join(os.path.dirname(__file__), "default_config.yaml")
@@ -144,6 +146,11 @@ class PoseSingle:
 
         self.is_detection = False
 
+        # This entity will remember last seen ids from last N frames
+        # TODO pass this N from outside
+        # This is required for id refiner. 
+        self.ids_buffer = deque(maxlen=3)
+
         if camera_movement is not None:
             warnings.warn("""
                           Do not use vis_movement = True,
@@ -187,11 +194,19 @@ class PoseSingle:
             self.camera_in_base.mask = False
             self.kf = None
 
-        if debug:
-            self.camera_in_base_nofilter = np.ma.array([[1, 0, 0, 0],
-                                                        [0, 1, 0, 0],
-                                                        [0, 0, 1, 0],
-                                                        [0, 0, 0, 1]])
+        self.camera_in_base_nofilter = np.ma.array([[1, 0, 0, 0],
+                                                    [0, 1, 0, 0],
+                                                    [0, 0, 1, 0],
+                                                    [0, 0, 0, 1]])
+
+        # Initialise IdDecodeRefiner
+        self.id_refiner = IdDecodeRefiner(
+            all_marker_poses=self.all_marker_poses,
+            marker_edge_len = marker_edge_len,
+            matrix_coefficients = matrix_coefficients,
+            distortion_coefficients = distortion_coefficients,
+            guess_threshold = 1, #  TODO pass this N from outside
+        )
 
     def _init_deep_detector(self, detector_type: str = 'yolo'):
 
@@ -285,15 +300,15 @@ class PoseSingle:
 
         # /// Attempt to detect them with the classical method ///
         corners, ids, rejected_img_points = detect_markers_opencv(
-            frame=image,
-            aruco_dict_type=self.aruco_dict_type,
-            matrix_coefficients=self.matrix_coefficients,
-            distortion_coefficients=self.distortion_coefficients,
+            frame = image,
+            aruco_dict_type = self.aruco_dict_type,
+            matrix_coefficients = self.matrix_coefficients,
+            distortion_coefficients = self.distortion_coefficients,
             adaptiveThreshWinSizeMin = self.adaptiveThreshWinSizeMin,
             adaptiveThreshWinSizeMax = self.adaptiveThreshWinSizeMax,
             adaptiveThreshWinSizeStep = self.adaptiveThreshWinSizeStep,
             adaptiveThreshConstant = self.adaptiveThreshConstant,
-            invert_image=self.invert_image)
+            invert_image = self.invert_image)
         
         # Do some postprocessing based on the result
         if ids is not None:
@@ -311,7 +326,7 @@ class PoseSingle:
         # (only if nothing is detected with the function above)
         if self.deep_detector and corners_dict == {}:
             corners, ids = self.deep_detector.inference(
-                image=image, detect_scale=None)
+                image = image, detect_scale=None)
             if len(corners) > 0:
                 mask = np.array([
                         id in self.all_marker_poses.keys() for id in ids
@@ -504,9 +519,8 @@ class PoseSingle:
 
                 # Subtract bias
                 camera_in_base_result[0, 3] -= self.x_bias
-                if self.debug:
-                    self.camera_in_base_nofilter = np.ma.asarray(
-                        camera_in_base_weighted)
+                self.camera_in_base_nofilter = np.ma.asarray(
+                    camera_in_base_weighted)
                 # self.camera_in_base = camera_in_base_result
             return camera_in_base_result
     
@@ -625,7 +639,9 @@ class PoseSingle:
         self,
         corners_dict: dict,
         image: np.array,
-        return_frame: bool = False
+        return_frame: bool = False,
+        corners_raw: np.ndarray = None,
+        ids_raw: np.ndarray = None,
     ) -> tuple[np.ndarray, np.ndarray, dict[float]] | tuple[
             np.ndarray, np.ndarray, np.ndarray, dict[float]]:
         """
@@ -659,7 +675,29 @@ class PoseSingle:
         # /// Step 1. Extract detections ///
 
         corners, ids = list(corners_dict.values()), list(corners_dict.keys())
+        # print(corners_dict)
+        # /// Step 1.1. Refine ids ///
+        # If we pass raw corners and ids, make refinement
+        # if (ids is not None) and (corners is not None) \
+        #     and (self.camera_in_base_nofilter.data != np.array(np.eye(4))).all():
+
+        #     self.camera_in_base_nofilter_nobias = \
+        #         self.camera_in_base_nofilter.data.copy()
+        #     self.camera_in_base_nofilter_nobias[0][3] += self.x_bias 
+
+        #     corners_dict = self.id_refiner.refine_ids(
+        #         self.self.id_refiner._guess_id,
+        #         corners, ids,
+        #         prev_frame_ids = flatten(list(self.ids_buffer)),
+        #         estimated_coordinates_nobias = self.camera_in_base_nofilter_nobias,
+        #         )
+
+        #     corners, ids = list(corners_dict.values()), list(corners_dict.keys())
+        #     print(corners_dict)
+        #     self.ids_buffer.append(ids)
         # import ipdb; ipdb.set_trace()
+        self.ids_buffer.append(ids)
+
 
         # /// Step 2. Estimate marker poses in camera ///
         mtcs, rvecs, tvecs = estimate_marker_poses_in_camera_extrinsic_guess(
@@ -802,7 +840,8 @@ class PoseSingle:
                 for debug/research, because when movement is visualised,
                 no markers can be detected in further steps
             vis_detections: bool - visualise detections or not
-        Returnes
+
+        Returns
         --------
             Tuple[return of self.estimate_pose, is_camera_moving]
         """
@@ -884,7 +923,8 @@ class PoseMultiple:
     """
     def __init__(self,
                  estimators: list[PoseSingle],
-                 apply_kf: bool = True,
+                 should_apply_kf: bool = True,
+                 should_refine_ids: bool = True,
                  kf_transition_covariance: np.ndarray =
                   DEFAULTS['KF']['transition_covariance'],
                  kf_observation_covariance: np.ndarray =
@@ -908,21 +948,39 @@ class PoseMultiple:
         -------
         None
         """
+
+        assert len(estimators) > 0, "At least one estimator must be passed for initialisation."
+        # TODO check that estimators have same marker 
+
         self.estimators = estimators
-        self.apply_kf = apply_kf
+        self.should_apply_kf = should_apply_kf
+        self.should_refine_ids = should_refine_ids
 
         # initial pose matrix
         self.state_mean = np.ma.array(np.eye(4))
         # Kalman-Filter initialization
         self.filtered_state_mean = None
         self.filtered_state_covariance = None
-        if apply_kf:
+        if should_apply_kf:
             # self.filtered_state_mean.mask = True
             self.kf = self._init_kf(kf_transition_covariance, kf_observation_covariance)
         else:
             # self.filtered_state_mean.mask = False
             self.kf = None
 
+        # We initialise an IdDecodeRefiner for each estimator because
+        # in general estimators may have different camera calibration parameters,
+        # and even marker edge lenghts and marker poses.
+        self.id_refiners = []
+        for single_estimator in self.estimators:
+            self.id_refiners.append(IdDecodeRefiner(
+                all_marker_poses= single_estimator.all_marker_poses,
+                marker_edge_len = single_estimator.marker_edge_len,
+                matrix_coefficients = single_estimator.matrix_coefficients,
+                distortion_coefficients = single_estimator.distortion_coefficients,
+                guess_threshold = 1, #  TODO pass this N from the outside
+                )
+            )
 
     def _init_kf(self, kf_transition_covariance, kf_observation_covariance):
         # time step
@@ -1060,7 +1118,7 @@ class PoseMultiple:
             # mean_pred.mask = True
         if debug:
             debug_mean_pred = mean_pred
-        if self.apply_kf:
+        if self.should_apply_kf:
             # If ANY cameras says is moving -> apply Kalman Filter as usual
             if any(is_moving):
                 filtered_mean_pred = self._kf_step(deepcopy(mean_pred))
@@ -1100,7 +1158,9 @@ class PoseMultiple:
         self,
         corner_dicts: list[dict],
         images: list[np.ndarray],
-        mask: np.ndarray = None
+        mask: np.ndarray = None,
+        corners_raw: np.ndarray = None,
+        ids_raw: np.ndarray = None,
     ) -> np.ndarray | tuple[np.ndarray, list, list]:
         """
         Takes a ndarray of images with order corresponding to estimators
@@ -1123,13 +1183,27 @@ class PoseMultiple:
         preds = []
         is_detection = []
         is_moving = []
-        for image, estimator, corner_dict, valid in zip(
-            images, self.estimators, corner_dicts, mask):
+
+        # FIXME remove after debug
+        self.corner_dicts = corner_dicts.copy()
+
+        # ID refinement
+        if self.should_refine_ids:
+            corner_dicts = self.refine_ids(
+                corners_raw, ids_raw,
+            )
+
+        # FIXME remove after debug
+        self.refined_corner_dicts = corner_dicts.copy()
+
+        for n, (image, estimator, corner_dict, valid) in enumerate(zip(
+            images, self.estimators, corner_dicts, mask)):
 
             if image is not None and valid:
 
                 if estimator.debug:
-                    _, pred, debug_pred, weights, movement = estimator.inference(corner_dict, image)
+                    _, pred, debug_pred, weights, movement = estimator.inference(
+                        corner_dict, image)
 
                     debug = True
                     if pred.shape:
@@ -1140,8 +1214,8 @@ class PoseMultiple:
                     debug_preds_weights.append(weights)
 
                 else:
-                    _, pred, weights, movement = estimator.inference(corner_dict, image)
-
+                    _, pred, weights, movement = estimator.inference(
+                        corner_dict, image)
                     if pred.shape:
                         preds.append(pred)
                     is_detection.append(estimator.is_detection)
@@ -1181,7 +1255,7 @@ class PoseMultiple:
             # mean_pred.mask = True
         if debug:
             debug_mean_pred = mean_pred
-        if self.apply_kf:
+        if self.should_apply_kf:
             # If ANY cameras says is moving -> apply Kalman Filter as usual
             if any(is_moving):
                 filtered_mean_pred = self._kf_step(deepcopy(mean_pred))
@@ -1216,9 +1290,56 @@ class PoseMultiple:
             return mean_pred, debug_mean_pred, debug_preds, debug_preds_weights
         else:
             return mean_pred
+    
+    def refine_ids(
+        self,
+        corners_raw,
+        ids_raw
+    ) -> dict: 
+        """
+        Refinement of ids based on guess_id method.
+        For each estimator the list of assumptions is formed from
+        ids in the buffer of the current estimator and ids in buffer of
+        other estimators +/- 1 dependind on their view direction
+        (PoseSingle.camera_orientation).
 
-    def __call__(self, corner_dicts, images, mask):
-        return self.inference(corner_dicts, images, mask)
+        Arguments
+        ---------
+        corners : list | np.ndarray
+            A list of corners in the order which corresponds to self.estimators
+        """
+
+        refined_corner_dicts = []
+        for n, (image_corners_raw, image_ids_raw, estimator, refiner) in enumerate(
+            zip(corners_raw, ids_raw, self.estimators, self.id_refiners)):
+            
+            # Ids from current estimator buffer:
+            prev_frame_ids = flatten_list(list(estimator.ids_buffer))
+
+            # Ids from other estimators +/- 1:
+            # FIXME it must work even in case of unsorted ids.
+            for other_estimator in self.estimators:
+                if estimator != other_estimator:
+                    ids_from_ohter_estimator =  [
+                        other_estimator.camera_orientation + x
+                        for x in flatten_list(list(other_estimator.ids_buffer))
+                    ]
+                    prev_frame_ids.extend(ids_from_ohter_estimator)
+
+            coordinates_to_compare = self.state_mean.data.copy()
+            coordinates_to_compare[0][3]+=estimator.x_bias
+            refined_corner_dict = refiner.refine_ids(
+                method_ = refiner._guess_id,
+                corners = image_corners_raw, ids = image_ids_raw,
+                prev_frame_ids = prev_frame_ids,
+                estimated_coordinates = coordinates_to_compare,
+                )
+            refined_corner_dicts.append(refined_corner_dict)
+        return refined_corner_dicts
+        
+
+    def __call__(self, *args, **kwargs):
+        return self.inference(*args, **kwargs)
 
 
 class PoseSpecial:
@@ -1365,7 +1486,6 @@ class PoseSpecial:
             init_tvecs=self.last_valid_marker_in_camera_tvec
             )
 
-        # print(mtcs)
         mtx = mtcs.get(self.marker_id, None)
         rvec = rvecs.get(self.marker_id, None)
         tvec = tvecs.get(self.marker_id, None)
@@ -1565,13 +1685,16 @@ class CranePoseEstimatior:
         self.detections = self.detector(
             self._get_batch(images))
 
-        corners_dicts_batch, masks_batch, all_corners_batch, all_ids_batch = self.detections
+        corners_dicts_batch, masks_batch, raw_corners_batch, raw_ids_batch = self.detections
         detections_with_ids = self._get_dict(corners_dicts_batch, images)
+        raw_corners_by_cranes = self._get_dict(raw_corners_batch, images)
+        raw_ids_by_cranes = self._get_dict(raw_ids_batch, images)
 
         # /// Estimate cordinates ///
         # (this piece of code estimates coordinates by those markers, which ids
         # were detected)
         estimates = {}
+        refined_corner_dicts = {}
         for crane_id in self.estimators.keys():
             # if self.debug:
             #     mean_pred, debug_mean_pred, debug_preds, debug_preds_weights = \
@@ -1580,15 +1703,19 @@ class CranePoseEstimatior:
             #     mean_pred = self.estimators[crane_id](detections[crane_id], images[crane_id])
 
             estimates[crane_id] = self.estimators[crane_id](
-                detections_with_ids[crane_id], images[crane_id], mask)
+                detections_with_ids[crane_id], images[crane_id], mask,
+                raw_corners_by_cranes[crane_id], raw_ids_by_cranes[crane_id])
+
+            refined_corner_dicts[crane_id] = self.estimators[crane_id].refined_corner_dicts
 
             
         if return_detections:
             result = {
                 'estimates': estimates,
                 'detections_with_ids': detections_with_ids, 
-                'corners': all_corners_batch, 
-                'ids': all_ids_batch}
+                'corners': raw_corners_batch, 
+                'ids': raw_ids_batch,
+                'detections_with_refined_ids': refined_corner_dicts}
         else:
             result = {
                 'estimates': estimates}

@@ -371,6 +371,19 @@ def draw_weights_on_frame(frame, corners, weights):
     return frame
 
 
+def draw_ids_on_frame(frame, corners_dict, color=(255, 50, 50)):
+    font = cv2.FONT_HERSHEY_SIMPLEX
+
+    for id in corners_dict.keys():
+        org = (int(np.mean(corners_dict[id][0][:, 0])), frame.shape[0] - 100)
+        font_scale = 3
+        thickness = 2
+        frame = cv2.putText(frame, str(id), org, font,
+                            font_scale, color, thickness, cv2.LINE_AA)
+
+    return frame
+
+
 def custom_estimatePoseSingleMarkers_use_extrinsic_guess(
         corners,
         marker_size,
@@ -704,3 +717,7 @@ def estimate_pose_single_marker(
     tvec = t.reshape(1, -1)[0]
 
     return rvec, tvec, nadas
+
+
+def flatten_list(xss):
+    return [x for xs in xss for x in xs]
