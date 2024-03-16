@@ -1,7 +1,30 @@
+# Путь относительно точки входа
+deep_detector_checkpoints_dir: 'cranpose/detectors/deep/models'
+yolo_detector_checkpoint_path: '/home/slava/cranpose/data/hdd/models/nlmk_aruco/v8n-p_960_dsv1/weights/last.pt'
+
+opencv_detector_adaptive_thresh_win_size_min: 13
+opencv_detector_adaptive_thresh_win_size_max: 33
+opencv_detector_adaptive_thresh_win_size_step: 10
+opencv_detector_adaptive_thresh_constant: 1
+
+opencv_decoder_adaptive_thresh_win_size_min: 21
+opencv_decoder_adaptive_thresh_win_size_max: 41
+opencv_decoder_adaptive_thresh_win_size_step: 1
+opencv_decoder_adaptive_thresh_constant: 2
+
 KF:
   transition_covariance: 
-  - [8.28688186e-02, 4.56069709e-02, 1.15608369e-03]
-  - [1.29460844e-03, 2.18108024e-02, 1.13942461e-03]
-  - [-2.02707405e-04, 8.94215211e-04, 7.30274151e-05]
+  - [8.28688186e+2, 4.56069709e+02, 1.15608369e+01]
+  - [1.29460844e+01, 2.18108024e+02, 1.13942461e+01]
+  - [-2.02707405e-01, 8.94215211e-01, 7.30274151e-02]
   observation_covariance:
-  - [5000]
+  - [5]
+
+
+KF_old:
+    transition_covariance: 
+    - [8.28688186e-02, 4.56069709e-02, 1.15608369e-03]
+    - [1.29460844e-03, 2.18108024e-02, 1.13942461e-03]
+    - [-2.02707405e-04, 8.94215211e-04, 7.30274151e-05]
+    observation_covariance:
+    - [5000]

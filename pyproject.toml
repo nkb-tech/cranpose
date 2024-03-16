@@ -1,3 +1,30 @@
 [build-system]
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
+
+[tool.isort]
+profile = "black"
+sections=["FUTURE", "STDLIB", "THIRDPARTY", "FIRSTPARTY", "LOCALFOLDER"]
+line_length = 80
+
+[tool.yapf]
+based_on_style = "pep8"
+spaces_before_comment = 4
+split_before_logical_operator = true
+column_limit = 80
+allow_split_before_dict_value = false
+dedent_closing_brackets = true
+split_before_first_argument = true
+split_complex_comprehension = true
+split_before_dict_set_generator = true
+split_arguments_when_comma_terminated = true
+blank_line_before_nested_class_or_def = true
+
+[tool.flake8]
+max-line-length = 80
+select = ['F', 'E', 'W', ]
+
+per-file-ignores = [
+    '__init__.py:F401',
+]
+count = true

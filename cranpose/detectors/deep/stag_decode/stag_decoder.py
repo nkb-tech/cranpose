@@ -22,7 +22,29 @@ class StagDecoder:
         self.iter_num = iter_num
         self.marker_dict = marker_dict
 
+    def partial_detect_tags(self, image, rois):
 
+        batch_size = self.batch_size
+        self.cnn_timing_list = []
+        self.prediction_timing_list = []
+        self.postprocess_timing_list = []
+
+        rois_curr = rois
+
+        # iteration by updating ROIs
+        decoded_tags = [{'is_valid': False} for _ in range(len(rois))]
+        t0 = time.time()
+
+        crops, H_list, valid_ids = rectify_crops(image, rois_curr, self.roi_in_crop, self.image_rect_size)
+
+        # CNN prediction
+        features_pred_list = []
+        batch_id = 0             
+        while batch_id * batch_size < len(crops):
+            features_pred_list += self.predictor.predict(crops[batch_id *batch_size:(batch_id+1)*batch_size])
+            batch_id +=1
+
+        return features_pred_list, crops
 
     def detect_tags(self, image, rois):
 

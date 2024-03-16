@@ -12,7 +12,8 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 from .utils import (ARUCO_DICT, custom_estimatePoseSingleMarkers,
                    custom_estimatePoseSingleMarkers_use_extrinsic_guess,
-                   f_area, f_left_x_002, f_right_x_002, poly_area)
+                   f_area, f_left_x_002, f_right_x_002, poly_area,
+                   crop_poly_fill_bg)
 
 
 def estimate_marker_poses_in_camera(frame: np.ndarray,
@@ -234,17 +235,13 @@ def estimate_marker_poses_in_camera_extrinsic_guess(
         init_tvecs={},
 ):
     """
-    Function detects aruco markers from dict "aruco_dict_type"
-    and estimates their poses in camera coordinate system
+    Function estimates marker poses in camera coordinate system
 
     args:
-    frame - Frame from the video stream
     matrix_coefficients - Intrinsic matrix of the calibrated camera
     distortion_coefficients - Distortion coefficients associated with your camera
 
     return:
-    frame - The frame with the axis drawn on it
-    ids - list of markers' ids
     mtcs - list of matrices (marker coordinate systems in camera coordinate system)
     """
 
@@ -255,7 +252,6 @@ def estimate_marker_poses_in_camera_extrinsic_guess(
     # If markers are detected
     if len(corners) > 0:
         for i, id in enumerate(ids):
-
             rvec, tvec, marker_points = \
                 custom_estimatePoseSingleMarkers_use_extrinsic_guess(
                     corners[i],
@@ -267,8 +263,8 @@ def estimate_marker_poses_in_camera_extrinsic_guess(
                     init_tvecs.get(id, None),
                 )
 
-            r = R.from_rotvec(rvec[0][0])
-            mtx = np.vstack([np.column_stack([r.as_matrix(), tvec[0][0]]), [0, 0, 0, 1]])
+            r = R.from_rotvec(rvec[0])
+            mtx = np.vstack([np.column_stack([r.as_matrix(), tvec[0]]), [0, 0, 0, 1]])
 
             mtcs[id] = mtx
             rvecs[id] = rvec
@@ -282,6 +278,10 @@ def detect_markers_opencv(
     aruco_dict_type: str,
     matrix_coefficients: np.ndarray,
     distortion_coefficients: np.ndarray,
+    adaptiveThreshWinSizeMin: int = 13,
+    adaptiveThreshWinSizeMax: int = 33,
+    adaptiveThreshWinSizeStep: int = 10,
+    adaptiveThreshConstant: int = 1,
     invert_image: bool = False,
 ):
     """
@@ -314,14 +314,76 @@ def detect_markers_opencv(
     dictionary = cv2.aruco.getPredefinedDictionary(aruco_dict_type)
     parameters = cv2.aruco.DetectorParameters()
     parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+    parameters.adaptiveThreshWinSizeMin = adaptiveThreshWinSizeMin
+    parameters.adaptiveThreshWinSizeMax = adaptiveThreshWinSizeMax
+    parameters.adaptiveThreshWinSizeStep = adaptiveThreshWinSizeStep
+    parameters.adaptiveThreshConstant = adaptiveThreshConstant
 
     detector = cv2.aruco.ArucoDetector(dictionary, parameters)
     corners, ids, rejected_img_points = detector.detectMarkers(
-        frame,)
+        frame)
 
     if ids is not None:
         ids = ids.reshape(1, -1)[0]
     return corners, ids, rejected_img_points
+
+def detect_markers_combined_v2(
+        image,
+        aruco_dict_type,
+        deep_detector,
+        transform_imgage_in_second_classic_detector):
+
+    dictionary = cv2.aruco.getPredefinedDictionary(aruco_dict_type)
+    parameters = cv2.aruco.DetectorParameters()
+    parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+    parameters.adaptiveThreshWinSizeMin = 31
+    parameters.adaptiveThreshWinSizeMax = 31
+    parameters.adaptiveThreshConstant = 2
+
+    detector = cv2.aruco.ArucoDetector(dictionary, parameters)
+    
+    # /// Step 1. Deep detection stage 1 ///
+    rois_info = deep_detector(image)
+
+    all_corners = []
+    all_ids = []
+    
+    # /// Step 2. Iterate over rois to find valid markers ///
+    # print(rois_info)
+    for roi_info in rois_info:
+        # Crop
+        # import ipdb; ipdb.set_trace()
+        croped, mask, dst, dst2 = crop_poly_fill_bg(
+            image, 
+            roi_info.astype(int),
+            # roi_info['ordered_corners'],
+            boundary=15, bgfill=155)
+        # Resize
+        resized_dst_2 = cv2.resize(dst2, [220,220])
+        # adjust
+        alpha = 2.5 # Contrast control (1.0-3.0)
+        beta = -150 # Brightness control (0-100)
+
+        adjusted = cv2.convertScaleAbs(cv2.cvtColor(resized_dst_2, cv2.COLOR_BGR2GRAY),
+                                    alpha=alpha, beta=beta)
+
+        # find markers
+        corners, ids, rejected_img_points = detector.detectMarkers(
+            cv2.medianBlur(adjusted,7))
+        
+        # print(corners, ids)
+        if ids is not None:
+            all_corners.append([roi_info])
+            all_ids.append(ids[0][0])
+
+    all_corners = np.array(all_corners)
+    
+    if all_ids == []:
+        all_ids = None
+    else:
+        all_ids = np.array(all_ids)
+
+    return all_corners, all_ids
 
 
 def compute_marker_weights(
@@ -343,6 +405,7 @@ def compute_marker_weights(
         weight_func_right_edge - function to weight marker location relative to rightmost edge)
 
     """
+    # import ipdb; ipdb.set_trace()
     corners = corner_dict.values()
     ids = corner_dict.keys()
     f_area = weight_func_area
