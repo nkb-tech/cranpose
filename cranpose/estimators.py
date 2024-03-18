@@ -1695,18 +1695,33 @@ class CranePoseEstimatior:
         # were detected)
         estimates = {}
         refined_corner_dicts = {}
+
+        estimates_nofilter = {}
+        debug_preds = {}
+        debug_preds_weights = {}
         for crane_id in self.estimators.keys():
             # if self.debug:
             #     mean_pred, debug_mean_pred, debug_preds, debug_preds_weights = \
             #     self.estimators[crane_id](detections[crane_id], images[crane_id])
             # else:
             #     mean_pred = self.estimators[crane_id](detections[crane_id], images[crane_id])
+            if self.debug:
+                mean_pred, debug_mean_pred, debug_pred, debug_pred_weights = self.estimators[crane_id](
+                    detections_with_ids[crane_id], images[crane_id], mask,
+                    raw_corners_by_cranes[crane_id], raw_ids_by_cranes[crane_id])
 
-            estimates[crane_id] = self.estimators[crane_id](
-                detections_with_ids[crane_id], images[crane_id], mask,
-                raw_corners_by_cranes[crane_id], raw_ids_by_cranes[crane_id])
+                estimates[crane_id] = mean_pred
+                estimates_nofilter[crane_id] = debug_mean_pred
+                debug_preds[crane_id] = debug_pred
+                debug_preds_weights[crane_id] = debug_pred_weights
+                refined_corner_dicts[crane_id] = self.estimators[crane_id].refined_corner_dicts
+            else:
 
-            refined_corner_dicts[crane_id] = self.estimators[crane_id].refined_corner_dicts
+                estimates[crane_id] = self.estimators[crane_id](
+                    detections_with_ids[crane_id], images[crane_id], mask,
+                    raw_corners_by_cranes[crane_id], raw_ids_by_cranes[crane_id])
+
+                refined_corner_dicts[crane_id] = self.estimators[crane_id].refined_corner_dicts
 
             
         if return_detections:
@@ -1719,6 +1734,12 @@ class CranePoseEstimatior:
         else:
             result = {
                 'estimates': estimates}
+        if self.debug:
+            result.update({
+                'estimates_nofilter': estimates_nofilter, 
+                'debug_preds': debug_preds, 
+                'debug_preds_weights': debug_preds_weights,
+            })
 
         return result
         
